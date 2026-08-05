@@ -43,7 +43,11 @@ from config import (
     YELLOW,
 )
 from entities import Enemy, FriendlyTank, Projectile, Tower
-from storage import add_score, load_leaderboard
+from online_leaderboard import (
+    load_online_leaderboard,
+    submit_online_score,
+)
+from storage import add_score, load_leaderboard, save_leaderboard
 
 
 # ============================================================
@@ -276,6 +280,18 @@ class FrontlineCommand:
 
         self.score_saved = False
         self.leaderboard = load_leaderboard()
+
+        self.leaderboard_task: asyncio.Task | None = None
+        self.score_submit_task: asyncio.Task | None = None
+
+        self.leaderboard_loading = False
+        self.score_uploading = False
+
+        self.leaderboard_status = (
+            "Local leaderboard loaded."
+            if self.leaderboard
+            else "No scores saved yet."
+        )
 
         self.status_message = ""
         self.status_message_until = 0
@@ -1001,6 +1017,97 @@ class FrontlineCommand:
             if text.life <= 0:
                 self.floating_texts.remove(text)
 
+    def open_leaderboard(self) -> None:
+        self.state = "leaderboard"
+        self.start_online_leaderboard_load()
+
+    def start_online_leaderboard_load(self) -> None:
+        if (
+            self.leaderboard_task is not None
+            and not self.leaderboard_task.done()
+        ):
+            return
+
+        self.leaderboard_loading = True
+        self.leaderboard_status = (
+            "Loading all-time online scores..."
+        )
+
+        self.leaderboard_task = asyncio.create_task(
+            load_online_leaderboard()
+        )
+
+    def start_online_score_submit(self) -> None:
+        if (
+            self.score_submit_task is not None
+            and not self.score_submit_task.done()
+        ):
+            return
+
+        self.score_uploading = True
+        self.leaderboard_status = (
+            "Saving score online..."
+        )
+
+        self.score_submit_task = asyncio.create_task(
+            submit_online_score(
+                self.player_name,
+                self.score,
+                self.wave,
+                str(self.difficulty["display_name"]),
+                self.kills,
+            )
+        )
+
+    def update_online_leaderboard_tasks(self) -> None:
+        if (
+            self.score_submit_task is not None
+            and self.score_submit_task.done()
+        ):
+            try:
+                success, message = (
+                    self.score_submit_task.result()
+                )
+            except Exception as error:
+                success = False
+                message = (
+                    "Online score error: "
+                    f"{error}"
+                )
+
+            self.score_submit_task = None
+            self.score_uploading = False
+            self.leaderboard_status = message
+
+            if success:
+                self.start_online_leaderboard_load()
+
+        if (
+            self.leaderboard_task is not None
+            and self.leaderboard_task.done()
+        ):
+            try:
+                online_scores, message = (
+                    self.leaderboard_task.result()
+                )
+            except Exception as error:
+                online_scores = []
+                message = (
+                    "Online leaderboard error: "
+                    f"{error}"
+                )
+
+            self.leaderboard_task = None
+            self.leaderboard_loading = False
+
+            if online_scores:
+                self.leaderboard = online_scores
+                save_leaderboard(self.leaderboard)
+            elif not self.leaderboard:
+                self.leaderboard = load_leaderboard()
+
+            self.leaderboard_status = message
+
     def end_game(self) -> None:
         if not self.score_saved:
             add_score(
@@ -1013,6 +1120,7 @@ class FrontlineCommand:
             )
 
             self.score_saved = True
+            self.start_online_score_submit()
 
         self.wave_active = False
         self.paused = False
@@ -1069,7 +1177,7 @@ class FrontlineCommand:
             elif event.key == pygame.K_RETURN:
                 self.reset_game()
             elif event.key == pygame.K_l:
-                self.state = "leaderboard"
+                self.open_leaderboard()
 
     def handle_playing(
         self,
@@ -1196,7 +1304,7 @@ class FrontlineCommand:
                 if event.key in (pygame.K_r, pygame.K_m):
                     self.state = "difficulty"
                 elif event.key == pygame.K_l:
-                    self.state = "leaderboard"
+                    self.open_leaderboard()
 
         elif self.state == "leaderboard":
             if (
@@ -2446,6 +2554,25 @@ class FrontlineCommand:
 
                 y += 42
 
+        status_colour = (
+            LIGHT_BLUE
+            if self.leaderboard_loading
+            or self.score_uploading
+            else LIGHT_GREEN
+            if "loaded" in self.leaderboard_status.lower()
+            or "saved" in self.leaderboard_status.lower()
+            else LIGHT_GREY
+        )
+
+        self.draw_text(
+            self.leaderboard_status,
+            self.small_font,
+            status_colour,
+            GAME_WIDTH // 2,
+            688,
+            center=True,
+        )
+
         self.draw_text(
             "Press Enter, M, or Escape to return",
             self.normal_font,
@@ -2488,6 +2615,7 @@ class FrontlineCommand:
             for event in pygame.event.get():
                 self.handle_event(event)
 
+            self.update_online_leaderboard_tasks()
             self.update(current_time)
             self.draw(current_time)
 

@@ -1449,33 +1449,78 @@ class Player:
         self.last_movement = 0
 
     def update(self, keys):
-        movement = 0
+        horizontal = 0
+        vertical = 0
 
         if (
             keys[pygame.K_a]
             or keys[pygame.K_LEFT]
         ):
-            movement -= self.speed
+            horizontal -= 1
 
         if (
             keys[pygame.K_d]
             or keys[pygame.K_RIGHT]
         ):
-            movement += self.speed
+            horizontal += 1
 
-        self.rect.x += movement
+        if (
+            keys[pygame.K_w]
+            or keys[pygame.K_UP]
+        ):
+            vertical -= 1
 
-        self.rect.x = clamp(
-            self.rect.x,
+        if (
+            keys[pygame.K_s]
+            or keys[pygame.K_DOWN]
+        ):
+            vertical += 1
+
+        movement = pygame.Vector2(
+            horizontal,
+            vertical,
+        )
+
+        # Normalize diagonal movement so moving diagonally is not
+        # faster than moving in a straight line.
+        if movement.length_squared() > 0:
+            movement = movement.normalize()
+            movement *= self.speed
+
+        self.rect.x += round(
+            movement.x
+        )
+
+        self.rect.y += round(
+            movement.y
+        )
+
+        # Keep the complete ship inside all four screen edges.
+        self.rect.left = max(
             8,
-            GAME_WIDTH - self.rect.width - 8,
+            self.rect.left,
+        )
+
+        self.rect.right = min(
+            GAME_WIDTH - 8,
+            self.rect.right,
+        )
+
+        self.rect.top = max(
+            8,
+            self.rect.top,
+        )
+
+        self.rect.bottom = min(
+            GAME_HEIGHT - 8,
+            self.rect.bottom,
         )
 
         target_bank = 0.0
 
-        if movement < 0:
+        if movement.x < 0:
             target_bank = -1.0
-        elif movement > 0:
+        elif movement.x > 0:
             target_bank = 1.0
 
         self.bank_amount += (
@@ -1483,7 +1528,11 @@ class Player:
             - self.bank_amount
         ) * 0.18
 
-        self.last_movement = movement
+        self.last_movement = (
+            movement.x,
+            movement.y,
+        )
+
         self.engine_animation += 0.18
 
     def can_shoot(self, current_time):
@@ -2080,6 +2129,7 @@ class Enemy:
         self,
         enemy_type,
         wave,
+        player_rect=None,
     ):
         self.enemy_type = enemy_type
 
@@ -2140,13 +2190,41 @@ class Enemy:
 
         self.speed += difficulty_bonus
 
+        spawn_x = random.randint(
+            20,
+            GAME_WIDTH
+            - self.width
+            - 20,
+        )
+
+        # When the player is flying near the top, avoid placing a
+        # newly spawned enemy directly above or on top of the ship.
+        if player_rect is not None:
+            safe_horizontal_distance = 170
+            attempts = 0
+
+            while (
+                abs(
+                    (
+                        spawn_x
+                        + self.width // 2
+                    )
+                    - player_rect.centerx
+                )
+                < safe_horizontal_distance
+                and attempts < 12
+            ):
+                spawn_x = random.randint(
+                    20,
+                    GAME_WIDTH
+                    - self.width
+                    - 20,
+                )
+
+                attempts += 1
+
         self.rect = pygame.Rect(
-            random.randint(
-                20,
-                GAME_WIDTH
-                - self.width
-                - 20,
-            ),
+            spawn_x,
             -self.height
             - random.randint(
                 0,
@@ -4629,6 +4707,7 @@ class SpaceShooterGame:
             Enemy(
                 self.choose_enemy_type(),
                 self.wave,
+                self.player.rect,
             )
         )
 

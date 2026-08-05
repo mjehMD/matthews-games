@@ -252,11 +252,38 @@ class FrontlineCommand:
 
         self.clock = pygame.time.Clock()
 
-        self.title_font = pygame.font.Font(None, 70)
-        self.heading_font = pygame.font.Font(None, 38)
-        self.normal_font = pygame.font.Font(None, 27)
-        self.small_font = pygame.font.Font(None, 20)
-        self.tiny_font = pygame.font.Font(None, 17)
+        font_name = pygame.font.match_font(
+            "dejavusans,liberationsans,arial"
+        )
+
+        self.title_font = pygame.font.Font(
+            font_name,
+            58,
+        )
+
+        self.heading_font = pygame.font.Font(
+            font_name,
+            30,
+        )
+
+        self.normal_font = pygame.font.Font(
+            font_name,
+            22,
+        )
+
+        self.small_font = pygame.font.Font(
+            font_name,
+            18,
+        )
+
+        self.tiny_font = pygame.font.Font(
+            font_name,
+            15,
+        )
+
+        self.title_font.set_bold(True)
+        self.heading_font.set_bold(True)
+        self.normal_font.set_bold(True)
 
         self.running = True
 

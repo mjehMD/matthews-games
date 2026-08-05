@@ -450,19 +450,52 @@ class FrontlineCommand:
         )
 
     def update_display_layout(self) -> None:
-        display_width = self.display_surface.get_width()
-        display_height = self.display_surface.get_height()
-
-        scale_x = display_width // GAME_WIDTH
-        scale_y = display_height // GAME_HEIGHT
-
-        self.display_scale = max(
+        display_width = max(
             1,
-            min(scale_x, scale_y),
+            self.display_surface.get_width(),
         )
 
-        rendered_width = GAME_WIDTH * self.display_scale
-        rendered_height = GAME_HEIGHT * self.display_scale
+        display_height = max(
+            1,
+            self.display_surface.get_height(),
+        )
+
+        # Always fit the entire 1100 x 750 game inside the
+        # available browser or monitor area. Whole-number
+        # scaling is used whenever it fits; smaller screens
+        # use a fractional scale rather than cropping.
+        fit_scale = min(
+            display_width / GAME_WIDTH,
+            display_height / GAME_HEIGHT,
+        )
+
+        integer_scale = int(fit_scale)
+
+        if integer_scale >= 1:
+            self.display_scale = float(
+                integer_scale
+            )
+        else:
+            self.display_scale = max(
+                0.1,
+                fit_scale,
+            )
+
+        rendered_width = max(
+            1,
+            round(
+                GAME_WIDTH
+                * self.display_scale
+            ),
+        )
+
+        rendered_height = max(
+            1,
+            round(
+                GAME_HEIGHT
+                * self.display_scale
+            ),
+        )
 
         self.display_offset_x = (
             display_width - rendered_width
@@ -493,11 +526,11 @@ class FrontlineCommand:
 
         game_x = (
             display_x - self.display_offset_x
-        ) // self.display_scale
+        ) / self.display_scale
 
         game_y = (
             display_y - self.display_offset_y
-        ) // self.display_scale
+        ) / self.display_scale
 
         return int(game_x), int(game_y)
 
@@ -523,10 +556,18 @@ class FrontlineCommand:
     def present_frame(self) -> None:
         self.display_surface.fill((0, 0, 0))
 
-        if self.display_scale == 1:
+        if self.display_rect.size == (
+            GAME_WIDTH,
+            GAME_HEIGHT,
+        ):
             rendered_surface = self.screen
-        else:
+        elif self.display_scale.is_integer():
             rendered_surface = pygame.transform.scale(
+                self.screen,
+                self.display_rect.size,
+            )
+        else:
+            rendered_surface = pygame.transform.smoothscale(
                 self.screen,
                 self.display_rect.size,
             )

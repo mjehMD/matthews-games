@@ -844,6 +844,54 @@ class FrontlineCommand:
     # WAVES
     # ========================================================
 
+    def completed_boss_fights(self) -> int:
+        """
+        Return how many boss waves the player has already passed.
+
+        Waves 1-5 are tier 0, waves 6-10 are tier 1, and so on.
+        """
+        return max(
+            0,
+            (self.wave - 1) // 5,
+        )
+
+    def current_boss_tier(self) -> int:
+        """
+        Return the number of the current boss encounter.
+
+        Wave 5 is boss tier 1, wave 10 is boss tier 2, etc.
+        """
+        return max(
+            1,
+            self.wave // 5,
+        )
+
+    def normal_wave_enemy_count(self) -> int:
+        """
+        Increase wave size continuously and add a noticeable jump
+        after every completed boss fight.
+        """
+        boss_fights = self.completed_boss_fights()
+
+        return (
+            7
+            + self.wave * 2
+            + boss_fights * 4
+        )
+
+    def boss_wave_enemy_count(self) -> int:
+        """
+        Every boss wave contains one boss plus an expanding escort.
+        """
+        boss_tier = self.current_boss_tier()
+
+        escort_count = (
+            6
+            + boss_tier * 4
+        )
+
+        return 1 + escort_count
+
     def start_wave(self) -> None:
         if self.wave_active or self.enemies:
             self.set_status(
@@ -855,47 +903,99 @@ class FrontlineCommand:
         self.wave_active = True
 
         if self.wave % 5 == 0:
-            self.wave_enemies_to_spawn = 1
+            self.wave_enemies_to_spawn = (
+                self.boss_wave_enemy_count()
+            )
         else:
-            self.wave_enemies_to_spawn = 6 + self.wave * 2
+            self.wave_enemies_to_spawn = (
+                self.normal_wave_enemy_count()
+            )
 
         self.wave_spawned = 0
         self.last_spawn_time = 0
 
+        boss_fights = self.completed_boss_fights()
+
         self.spawn_delay = max(
-            330,
-            900 - self.wave * 18,
+            230,
+            860
+            - self.wave * 16
+            - boss_fights * 35,
         )
 
         for tower in self.towers:
             tower.rearm_for_wave()
 
         if self.wave % 5 == 0:
+            boss_tier = self.current_boss_tier()
+            escort_count = (
+                self.wave_enemies_to_spawn - 1
+            )
+
             self.set_status(
-                f"BOSS WAVE {self.wave}",
-                2500,
+                (
+                    f"BOSS WAVE {self.wave} - "
+                    f"TIER {boss_tier} BOSS + "
+                    f"{escort_count} ESCORTS"
+                ),
+                3000,
             )
         else:
-            self.set_status(f"Wave {self.wave} started.")
+            self.set_status(
+                (
+                    f"Wave {self.wave} started - "
+                    f"{self.wave_enemies_to_spawn} enemies"
+                ),
+                2200,
+            )
 
-    def choose_enemy_type(self) -> str:
-        if self.wave % 5 == 0:
-            return "boss"
+    def unlocked_enemy_types(self) -> list[str]:
+        """
+        Unlock tougher enemy types after boss fights.
+        """
+        completed_bosses = self.completed_boss_fights()
 
-        available = ["infantry", "scout"]
+        available = [
+            "infantry",
+            "scout",
+        ]
 
-        if self.wave >= 6:
-            available.extend(["armored", "jeep"])
+        if completed_bosses >= 1:
+            available.append("armored")
 
-        if self.wave >= 11:
+        if completed_bosses >= 2:
+            available.append("jeep")
+
+        if completed_bosses >= 3:
             available.append("tank")
 
+        return available
+
+    def choose_regular_enemy_type(self) -> str:
+        """
+        Make tougher enemies progressively more common after bosses.
+        """
+        available = self.unlocked_enemy_types()
+        completed_bosses = self.completed_boss_fights()
+
         weights = {
-            "infantry": 42,
-            "scout": 28,
-            "armored": 16,
-            "jeep": 10,
-            "tank": 4,
+            "infantry": max(
+                18,
+                48 - completed_bosses * 5,
+            ),
+            "scout": max(
+                16,
+                30 - completed_bosses * 2,
+            ),
+            "armored": (
+                15 + completed_bosses * 3
+            ),
+            "jeep": (
+                10 + completed_bosses * 3
+            ),
+            "tank": (
+                6 + completed_bosses * 4
+            ),
         }
 
         return random.choices(
@@ -906,6 +1006,53 @@ class FrontlineCommand:
             ],
             k=1,
         )[0]
+
+    def choose_boss_escort_type(self) -> str:
+        """
+        Boss escorts favour the toughest currently unlocked enemies.
+        """
+        available = self.unlocked_enemy_types()
+        boss_tier = self.current_boss_tier()
+
+        weights = {
+            "infantry": max(
+                8,
+                25 - boss_tier * 3,
+            ),
+            "scout": max(
+                10,
+                25 - boss_tier,
+            ),
+            "armored": (
+                20 + boss_tier * 3
+            ),
+            "jeep": (
+                15 + boss_tier * 3
+            ),
+            "tank": (
+                10 + boss_tier * 5
+            ),
+        }
+
+        return random.choices(
+            available,
+            weights=[
+                weights[enemy_type]
+                for enemy_type in available
+            ],
+            k=1,
+        )[0]
+
+    def choose_enemy_type(self) -> str:
+        if self.wave % 5 == 0:
+            # Spawn the boss first, then continue sending escorts
+            # while the boss is travelling along the road.
+            if self.wave_spawned == 0:
+                return "boss"
+
+            return self.choose_boss_escort_type()
+
+        return self.choose_regular_enemy_type()
 
     def spawn_enemy(self) -> None:
         enemy_type = self.choose_enemy_type()

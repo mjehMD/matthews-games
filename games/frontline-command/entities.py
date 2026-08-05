@@ -209,18 +209,57 @@ class Enemy:
         self.name = str(data["name"])
         self.wave = max(1, int(wave))
 
+        completed_bosses = max(
+            0,
+            (self.wave - 1) // 5,
+        )
+
+        boss_tier = max(
+            1,
+            self.wave // 5,
+        )
+
+        # Enemies improve every wave, with a larger permanent jump
+        # after every boss fight.
         health_scale = (
             1.0
-            + max(0, wave - 1) * 0.085
+            + max(0, self.wave - 1) * 0.055
+            + completed_bosses * 0.24
         )
 
         speed_scale = (
             1.0
             + min(
-                0.55,
-                max(0, wave - 1) * 0.011,
+                0.72,
+                max(0, self.wave - 1) * 0.008
+                + completed_bosses * 0.045,
             )
         )
+
+        damage_scale = (
+            1.0
+            + completed_bosses * 0.18
+            + max(0, self.wave - 1) * 0.012
+        )
+
+        armor_scale = (
+            1.0
+            + completed_bosses * 0.16
+        )
+
+        # Boss health grows aggressively from one boss fight to the
+        # next instead of using only the ordinary enemy formula.
+        if self.enemy_type == "boss":
+            boss_health_scale = (
+                1.0
+                + boss_tier * 0.80
+                + (boss_tier ** 1.35) * 0.22
+            )
+
+            health_scale *= boss_health_scale
+            damage_scale *= (
+                1.0 + boss_tier * 0.12
+            )
 
         self.max_health = float(
             data["health"]
@@ -229,9 +268,16 @@ class Enemy:
         )
 
         self.health = self.max_health
+
         self.armor = float(
             data.get("armor", 0)
+            * armor_scale
         )
+
+        if self.enemy_type == "boss":
+            self.armor += (
+                boss_tier * 0.45
+            )
 
         self.base_speed = float(
             data["speed"]
@@ -241,17 +287,26 @@ class Enemy:
 
         self.current_speed = self.base_speed
 
+        reward_scale = (
+            1.0
+            + completed_bosses * 0.10
+        )
+
         self.reward = max(
             1,
             int(
                 data["reward"]
                 * reward_multiplier
+                * reward_scale
             ),
         )
 
         self.base_damage = max(
             1,
-            int(data["base_damage"]),
+            int(
+                data["base_damage"]
+                * damage_scale
+            ),
         )
 
         self.colour = data["colour"]
@@ -468,7 +523,6 @@ class Enemy:
                 self.size + 6 + pulse,
                 width=2,
             )
-
 
     def draw_soldier(
         self,
@@ -730,55 +784,47 @@ class Enemy:
             colour,
         )
 
-        forward = pygame.Vector2(
+        cabin_center = pygame.Vector2(
+            center
+        ) - pygame.Vector2(
             math.cos(angle),
             math.sin(angle),
+        ) * 3
+
+        cabin_rect = pygame.Rect(
+            0,
+            0,
+            17,
+            15,
+        )
+
+        cabin_rect.center = (
+            round(cabin_center.x),
+            round(cabin_center.y),
+        )
+
+        pygame.draw.rect(
+            surface,
+            WINDOW_DARK,
+            cabin_rect,
+            border_radius=4,
+        )
+
+        pygame.draw.rect(
+            surface,
+            WINDOW_BLUE,
+            cabin_rect.inflate(-5, -5),
+            border_radius=3,
         )
 
         side = pygame.Vector2(
-            -forward.y,
-            forward.x,
+            -math.sin(angle),
+            math.cos(angle),
         )
 
-        cabin_center = (
-            pygame.Vector2(center)
-            - forward * 3
-        )
-
-        cabin_points = [
-            (-8, -7),
-            (8, -7),
-            (8, 7),
-            (-8, 7),
-        ]
-
-        draw_rotated_polygon(
-            surface,
-            cabin_points,
-            (
-                round(cabin_center.x),
-                round(cabin_center.y),
-            ),
-            angle,
-            WINDOW_DARK,
-        )
-
-        cabin_inner = [
-            (-5, -4),
-            (5, -4),
-            (5, 4),
-            (-5, 4),
-        ]
-
-        draw_rotated_polygon(
-            surface,
-            cabin_inner,
-            (
-                round(cabin_center.x),
-                round(cabin_center.y),
-            ),
-            angle,
-            WINDOW_BLUE,
+        forward = pygame.Vector2(
+            math.cos(angle),
+            math.sin(angle),
         )
 
         for front_offset in (-12, 12):
@@ -841,8 +887,24 @@ class Enemy:
         angle: float,
         boss: bool,
     ) -> None:
-        body_length = 64 if boss else 50
-        body_width = 36 if boss else 28
+        width = (
+            64
+            if boss
+            else 50
+        )
+
+        height = (
+            36
+            if boss
+            else 29
+        )
+
+        draw_shadow(
+            surface,
+            center,
+            width,
+            height,
+        )
 
         forward = pygame.Vector2(
             math.cos(angle),
@@ -854,125 +916,52 @@ class Enemy:
             forward.x,
         )
 
-        draw_shadow(
-            surface,
-            center,
-            body_length,
-            body_width,
-        )
-
-        tread_length = body_length
-        tread_width = 9 if boss else 7
-        tread_offset = (
-            body_width / 2
-            - tread_width / 2
-        )
-
-        for side_multiplier in (-1, 1):
-            tread_center = (
+        for side_offset in (
+            -height // 2,
+            height // 2,
+        ):
+            track_center = (
                 pygame.Vector2(center)
-                + side
-                * tread_offset
-                * side_multiplier
+                + side * side_offset
             )
 
-            outer_tread_points = [
-                (
-                    -tread_length / 2,
-                    -tread_width / 2 - 2,
-                ),
-                (
-                    tread_length / 2,
-                    -tread_width / 2 - 2,
-                ),
-                (
-                    tread_length / 2,
-                    tread_width / 2 + 2,
-                ),
-                (
-                    -tread_length / 2,
-                    tread_width / 2 + 2,
-                ),
-            ]
+            track_rect = pygame.Rect(
+                0,
+                0,
+                width,
+                8,
+            )
 
-            draw_rotated_polygon(
+            track_rect.center = (
+                round(track_center.x),
+                round(track_center.y),
+            )
+
+            pygame.draw.rect(
                 surface,
-                outer_tread_points,
-                (
-                    round(tread_center.x),
-                    round(tread_center.y),
-                ),
-                angle,
                 BLACK,
+                track_rect.inflate(4, 4),
+                border_radius=4,
             )
 
-            inner_tread_points = [
-                (
-                    -tread_length / 2 + 2,
-                    -tread_width / 2,
-                ),
-                (
-                    tread_length / 2 - 2,
-                    -tread_width / 2,
-                ),
-                (
-                    tread_length / 2 - 2,
-                    tread_width / 2,
-                ),
-                (
-                    -tread_length / 2 + 2,
-                    tread_width / 2,
-                ),
-            ]
-
-            draw_rotated_polygon(
+            pygame.draw.rect(
                 surface,
-                inner_tread_points,
-                (
-                    round(tread_center.x),
-                    round(tread_center.y),
-                ),
-                angle,
                 TRACK_DARK,
+                track_rect,
+                border_radius=4,
             )
 
-            wheel_count = (
-                6 if boss else 5
-            )
-
-            for wheel_index in range(
-                wheel_count
-            ):
-                progress = (
-                    wheel_index
-                    / max(
-                        1,
-                        wheel_count - 1,
-                    )
-                )
-
+            for wheel_index in range(5):
                 wheel_position = (
-                    tread_center
-                    - forward
-                    * (
-                        tread_length / 2
-                        - 7
+                    track_center
+                    - forward * (
+                        width / 2 - 7
                     )
-                    + forward
-                    * progress
-                    * (
-                        tread_length - 14
+                    + forward * (
+                        wheel_index
+                        * (width - 14)
+                        / 4
                     )
-                )
-
-                pygame.draw.circle(
-                    surface,
-                    BLACK,
-                    (
-                        round(wheel_position.x),
-                        round(wheel_position.y),
-                    ),
-                    4 if boss else 3,
                 )
 
                 pygame.draw.circle(
@@ -982,347 +971,137 @@ class Enemy:
                         round(wheel_position.x),
                         round(wheel_position.y),
                     ),
-                    2,
+                    3,
                 )
 
-        hull_points = [
-            (
-                -body_length / 2 + 3,
-                -body_width / 2 + 4,
-            ),
-            (
-                body_length / 2 - 9,
-                -body_width / 2 + 4,
-            ),
-            (
-                body_length / 2,
-                -body_width / 4,
-            ),
-            (
-                body_length / 2,
-                body_width / 4,
-            ),
-            (
-                body_length / 2 - 9,
-                body_width / 2 - 4,
-            ),
-            (
-                -body_length / 2 + 3,
-                body_width / 2 - 4,
-            ),
+        body_points = [
+            (-width / 2 + 4, -height / 2 + 5),
+            (width / 2 - 6, -height / 2 + 5),
+            (width / 2, 0),
+            (width / 2 - 6, height / 2 - 5),
+            (-width / 2 + 4, height / 2 - 5),
         ]
 
         draw_rotated_polygon(
             surface,
-            hull_points,
+            body_points,
             center,
             angle,
             BLACK,
         )
 
-        inner_hull_points = [
-            (
-                -body_length / 2 + 7,
-                -body_width / 2 + 7,
-            ),
-            (
-                body_length / 2 - 11,
-                -body_width / 2 + 7,
-            ),
-            (
-                body_length / 2 - 4,
-                -body_width / 5,
-            ),
-            (
-                body_length / 2 - 4,
-                body_width / 5,
-            ),
-            (
-                body_length / 2 - 11,
-                body_width / 2 - 7,
-            ),
-            (
-                -body_length / 2 + 7,
-                body_width / 2 - 7,
-            ),
+        inner_points = [
+            (-width / 2 + 8, -height / 2 + 8),
+            (width / 2 - 8, -height / 2 + 8),
+            (width / 2 - 4, 0),
+            (width / 2 - 8, height / 2 - 8),
+            (-width / 2 + 8, height / 2 - 8),
         ]
 
         draw_rotated_polygon(
             surface,
-            inner_hull_points,
+            inner_points,
             center,
             angle,
             colour,
         )
 
-        engine_center = (
-            pygame.Vector2(center)
-            - forward
-            * (
-                body_length
-                * 0.27
-            )
-        )
-
-        engine_length = (
-            18 if boss else 14
-        )
-
-        engine_width = (
-            22 if boss else 17
-        )
-
-        engine_points = [
-            (
-                -engine_length / 2,
-                -engine_width / 2,
-            ),
-            (
-                engine_length / 2,
-                -engine_width / 2,
-            ),
-            (
-                engine_length / 2,
-                engine_width / 2,
-            ),
-            (
-                -engine_length / 2,
-                engine_width / 2,
-            ),
-        ]
-
-        draw_rotated_polygon(
-            surface,
-            engine_points,
-            (
-                round(engine_center.x),
-                round(engine_center.y),
-            ),
-            angle,
-            METAL_DARK,
-        )
-
-        for side_offset in (
-            -5,
-            0,
-            5,
-        ):
-            vent_center = (
-                engine_center
-                + side * side_offset
-            )
-
-            vent_start = (
-                vent_center
-                - forward * 5
-            )
-
-            vent_end = (
-                vent_center
-                + forward * 5
-            )
-
-            pygame.draw.line(
-                surface,
-                METAL_LIGHT,
-                (
-                    round(vent_start.x),
-                    round(vent_start.y),
-                ),
-                (
-                    round(vent_end.x),
-                    round(vent_end.y),
-                ),
-                width=1,
-            )
-
-        turret_center = (
-            pygame.Vector2(center)
-            + forward * 3
-        )
-
-        turret_length = (
-            29 if boss else 22
-        )
-
-        turret_width = (
-            24 if boss else 18
-        )
-
-        turret_points = [
-            (
-                -turret_length / 2,
-                -turret_width / 2,
-            ),
-            (
-                turret_length / 2 - 4,
-                -turret_width / 2,
-            ),
-            (
-                turret_length / 2,
-                -turret_width / 3,
-            ),
-            (
-                turret_length / 2,
-                turret_width / 3,
-            ),
-            (
-                turret_length / 2 - 4,
-                turret_width / 2,
-            ),
-            (
-                -turret_length / 2,
-                turret_width / 2,
-            ),
-        ]
-
-        draw_rotated_polygon(
-            surface,
-            turret_points,
-            (
-                round(turret_center.x),
-                round(turret_center.y),
-            ),
-            angle,
-            BLACK,
-        )
-
-        inner_turret_points = [
-            (
-                -turret_length / 2 + 3,
-                -turret_width / 2 + 3,
-            ),
-            (
-                turret_length / 2 - 6,
-                -turret_width / 2 + 3,
-            ),
-            (
-                turret_length / 2 - 3,
-                -turret_width / 4,
-            ),
-            (
-                turret_length / 2 - 3,
-                turret_width / 4,
-            ),
-            (
-                turret_length / 2 - 6,
-                turret_width / 2 - 3,
-            ),
-            (
-                -turret_length / 2 + 3,
-                turret_width / 2 - 3,
-            ),
-        ]
-
-        draw_rotated_polygon(
-            surface,
-            inner_turret_points,
-            (
-                round(turret_center.x),
-                round(turret_center.y),
-            ),
-            angle,
-            METAL_DARK,
-        )
-
-        barrel_start = (
-            turret_center
-            + forward
-            * (
-                turret_length / 3
-            )
-        )
-
-        barrel_end = (
-            turret_center
-            + forward
-            * (
-                43 if boss else 34
-            )
-        )
-
-        pygame.draw.line(
-            surface,
-            BLACK,
-            (
-                round(barrel_start.x),
-                round(barrel_start.y),
-            ),
-            (
-                round(barrel_end.x),
-                round(barrel_end.y),
-            ),
-            width=8 if boss else 6,
-        )
-
-        pygame.draw.line(
-            surface,
-            METAL_LIGHT,
-            (
-                round(
-                    barrel_start.x
-                    + forward.x * 3
-                ),
-                round(
-                    barrel_start.y
-                    + forward.y * 3
-                ),
-            ),
-            (
-                round(barrel_end.x),
-                round(barrel_end.y),
-            ),
-            width=3 if boss else 2,
-        )
-
-        hatch_center = (
-            turret_center
-            - side
-            * (
-                6 if boss else 4
-            )
+        turret_radius = (
+            15
+            if boss
+            else 11
         )
 
         pygame.draw.circle(
             surface,
             BLACK,
-            (
-                round(hatch_center.x),
-                round(hatch_center.y),
-            ),
-            7 if boss else 5,
+            center,
+            turret_radius + 2,
+        )
+
+        pygame.draw.circle(
+            surface,
+            METAL_DARK,
+            center,
+            turret_radius,
+        )
+
+        turret_highlight = (
+            center[0]
+            - int(side.x * 3),
+            center[1]
+            - int(side.y * 3),
         )
 
         pygame.draw.circle(
             surface,
             METAL_MID,
-            (
-                round(hatch_center.x),
-                round(hatch_center.y),
+            turret_highlight,
+            max(
+                5,
+                turret_radius - 4,
             ),
-            5 if boss else 3,
+        )
+
+        barrel_length = (
+            38
+            if boss
+            else 29
+        )
+
+        barrel_end = (
+            pygame.Vector2(center)
+            + forward * barrel_length
+        )
+
+        pygame.draw.line(
+            surface,
+            BLACK,
+            center,
+            (
+                round(barrel_end.x),
+                round(barrel_end.y),
+            ),
+            width=7 if boss else 5,
+        )
+
+        pygame.draw.line(
+            surface,
+            METAL_MID,
+            (
+                round(
+                    center[0]
+                    + forward.x * 5
+                ),
+                round(
+                    center[1]
+                    + forward.y * 5
+                ),
+            ),
+            (
+                round(barrel_end.x),
+                round(barrel_end.y),
+            ),
+            width=3,
         )
 
         if boss:
             pygame.draw.circle(
                 surface,
                 RED,
-                (
-                    round(turret_center.x),
-                    round(turret_center.y),
-                ),
-                5,
+                center,
+                7,
             )
 
             antenna_start = (
-                turret_center
-                - side * 10
+                pygame.Vector2(center)
+                - side * 8
             )
 
             antenna_end = (
                 antenna_start
-                - side * 15
-                - forward * 3
+                - forward * 2
+                - side * 14
             )
 
             pygame.draw.line(
@@ -1474,25 +1253,13 @@ class Projectile:
         self.speed = speed
         self.colour = colour
 
-        self.projectile_type = (
-            projectile_type
-        )
+        self.projectile_type = projectile_type
 
-        self.splash_radius = (
-            splash_radius
-        )
+        self.splash_radius = splash_radius
+        self.armor_piercing = armor_piercing
 
-        self.armor_piercing = (
-            armor_piercing
-        )
-
-        self.slow_multiplier = (
-            slow_multiplier
-        )
-
-        self.slow_duration_ms = (
-            slow_duration_ms
-        )
+        self.slow_multiplier = slow_multiplier
+        self.slow_duration_ms = slow_duration_ms
 
         self.target_position = pygame.Vector2(
             target.position
@@ -1755,9 +1522,7 @@ class FriendlyTank:
         direction = target - self.position
         distance = direction.length()
 
-        movement = (
-            self.speed * time_scale
-        )
+        movement = self.speed * time_scale
 
         if distance <= movement:
             self.position = pygame.Vector2(
@@ -1772,7 +1537,8 @@ class FriendlyTank:
             self.last_direction = normalized
 
             self.position += (
-                normalized * movement
+                normalized
+                * movement
             )
 
         for enemy in enemies:
@@ -1811,7 +1577,6 @@ class FriendlyTank:
                     ] = current_time
 
                     self.hits_remaining -= 1
-
                     self.hit_flash_until = (
                         current_time + 100
                     )
@@ -1835,278 +1600,130 @@ class FriendlyTank:
         direction = self.last_direction
 
         if direction.length_squared() == 0:
-            direction = pygame.Vector2(
-                -1,
-                0,
-            )
-
-        direction = direction.normalize()
+            direction = pygame.Vector2(-1, 0)
 
         angle = math.atan2(
             direction.y,
             direction.x,
         )
 
-        side = pygame.Vector2(
-            -direction.y,
-            direction.x,
-        )
-
-        current_time = (
+        flash = (
             pygame.time.get_ticks()
+            < self.hit_flash_until
         )
 
         body_colour = (
             WHITE
-            if current_time
-            < self.hit_flash_until
+            if flash
             else FRIENDLY_GREEN
         )
 
-        body_length = 50
-        body_width = 28
+        width = 50
+        height = 29
 
         draw_shadow(
             surface,
             center,
-            body_length,
-            body_width,
+            width,
+            height,
         )
 
-        tread_length = body_length
-        tread_width = 7
-
-        tread_offset = (
-            body_width / 2
-            - tread_width / 2
+        forward = direction.normalize()
+        side = pygame.Vector2(
+            -forward.y,
+            forward.x,
         )
 
-        for side_multiplier in (-1, 1):
-            tread_center = (
+        for side_offset in (
+            -height // 2,
+            height // 2,
+        ):
+            track_center = (
                 pygame.Vector2(center)
-                + side
-                * tread_offset
-                * side_multiplier
+                + side * side_offset
             )
 
-            outer_tread_points = [
-                (
-                    -tread_length / 2,
-                    -tread_width / 2 - 2,
-                ),
-                (
-                    tread_length / 2,
-                    -tread_width / 2 - 2,
-                ),
-                (
-                    tread_length / 2,
-                    tread_width / 2 + 2,
-                ),
-                (
-                    -tread_length / 2,
-                    tread_width / 2 + 2,
-                ),
-            ]
+            track_rect = pygame.Rect(
+                0,
+                0,
+                width,
+                8,
+            )
 
-            draw_rotated_polygon(
+            track_rect.center = (
+                round(track_center.x),
+                round(track_center.y),
+            )
+
+            pygame.draw.rect(
                 surface,
-                outer_tread_points,
-                (
-                    round(tread_center.x),
-                    round(tread_center.y),
-                ),
-                angle,
                 BLACK,
+                track_rect.inflate(4, 4),
+                border_radius=4,
             )
 
-            inner_tread_points = [
-                (
-                    -tread_length / 2 + 2,
-                    -tread_width / 2,
-                ),
-                (
-                    tread_length / 2 - 2,
-                    -tread_width / 2,
-                ),
-                (
-                    tread_length / 2 - 2,
-                    tread_width / 2,
-                ),
-                (
-                    -tread_length / 2 + 2,
-                    tread_width / 2,
-                ),
-            ]
-
-            draw_rotated_polygon(
+            pygame.draw.rect(
                 surface,
-                inner_tread_points,
-                (
-                    round(tread_center.x),
-                    round(tread_center.y),
-                ),
-                angle,
                 TRACK_DARK,
+                track_rect,
+                border_radius=4,
             )
 
-            for wheel_index in range(5):
-                progress = (
-                    wheel_index / 4
-                )
-
-                wheel_position = (
-                    tread_center
-                    - direction
-                    * (
-                        tread_length / 2
-                        - 7
-                    )
-                    + direction
-                    * progress
-                    * (
-                        tread_length - 14
-                    )
-                )
-
-                pygame.draw.circle(
-                    surface,
-                    BLACK,
-                    (
-                        round(wheel_position.x),
-                        round(wheel_position.y),
-                    ),
-                    3,
-                )
-
-                pygame.draw.circle(
-                    surface,
-                    METAL_MID,
-                    (
-                        round(wheel_position.x),
-                        round(wheel_position.y),
-                    ),
-                    2,
-                )
-
-        hull_points = [
-            (-25, -10),
-            (16, -10),
-            (25, -5),
-            (25, 5),
-            (16, 10),
-            (-25, 10),
+        body_points = [
+            (-22, -10),
+            (18, -10),
+            (24, 0),
+            (18, 10),
+            (-22, 10),
         ]
 
         draw_rotated_polygon(
             surface,
-            hull_points,
+            body_points,
             center,
             angle,
             BLACK,
         )
 
-        inner_hull = [
-            (-21, -7),
-            (14, -7),
-            (21, -3),
-            (21, 3),
-            (14, 7),
-            (-21, 7),
+        inner_points = [
+            (-18, -7),
+            (15, -7),
+            (20, 0),
+            (15, 7),
+            (-18, 7),
         ]
 
         draw_rotated_polygon(
             surface,
-            inner_hull,
+            inner_points,
             center,
             angle,
             body_colour,
         )
 
-        engine_center = (
-            pygame.Vector2(center)
-            - direction * 13
-        )
-
-        engine_points = [
-            (-7, -8),
-            (7, -8),
-            (7, 8),
-            (-7, 8),
-        ]
-
-        draw_rotated_polygon(
+        pygame.draw.circle(
             surface,
-            engine_points,
-            (
-                round(engine_center.x),
-                round(engine_center.y),
-            ),
-            angle,
-            MILITARY_DARK,
-        )
-
-        turret_center = (
-            pygame.Vector2(center)
-            + direction * 3
-        )
-
-        turret_points = [
-            (-11, -8),
-            (8, -8),
-            (12, -4),
-            (12, 4),
-            (8, 8),
-            (-11, 8),
-        ]
-
-        draw_rotated_polygon(
-            surface,
-            turret_points,
-            (
-                round(turret_center.x),
-                round(turret_center.y),
-            ),
-            angle,
             BLACK,
+            center,
+            12,
         )
 
-        inner_turret = [
-            (-8, -5),
-            (6, -5),
-            (9, -3),
-            (9, 3),
-            (6, 5),
-            (-8, 5),
-        ]
-
-        draw_rotated_polygon(
+        pygame.draw.circle(
             surface,
-            inner_turret,
-            (
-                round(turret_center.x),
-                round(turret_center.y),
-            ),
-            angle,
             FRIENDLY_LIGHT,
-        )
-
-        barrel_start = (
-            turret_center
-            + direction * 6
+            center,
+            9,
         )
 
         barrel_end = (
-            turret_center
-            + direction * 34
+            pygame.Vector2(center)
+            + forward * 31
         )
 
         pygame.draw.line(
             surface,
             BLACK,
-            (
-                round(barrel_start.x),
-                round(barrel_start.y),
-            ),
+            center,
             (
                 round(barrel_end.x),
                 round(barrel_end.y),
@@ -2119,12 +1736,12 @@ class FriendlyTank:
             METAL_LIGHT,
             (
                 round(
-                    barrel_start.x
-                    + direction.x * 3
+                    center[0]
+                    + forward.x * 5
                 ),
                 round(
-                    barrel_start.y
-                    + direction.y * 3
+                    center[1]
+                    + forward.y * 5
                 ),
             ),
             (
@@ -2134,53 +1751,10 @@ class FriendlyTank:
             width=2,
         )
 
-        marking_center = (
-            pygame.Vector2(center)
-            - direction * 6
-        )
-
-        pygame.draw.circle(
-            surface,
-            YELLOW,
-            (
-                round(marking_center.x),
-                round(marking_center.y),
-            ),
-            4,
-        )
-
-        pygame.draw.line(
-            surface,
-            BLACK,
-            (
-                round(marking_center.x - 3),
-                round(marking_center.y),
-            ),
-            (
-                round(marking_center.x + 3),
-                round(marking_center.y),
-            ),
-            width=1,
-        )
-
-        pygame.draw.line(
-            surface,
-            BLACK,
-            (
-                round(marking_center.x),
-                round(marking_center.y - 3),
-            ),
-            (
-                round(marking_center.x),
-                round(marking_center.y + 3),
-            ),
-            width=1,
-        )
-
         health_ratio = max(
-            0.0,
+            0,
             min(
-                1.0,
+                1,
                 self.hits_remaining
                 / max(
                     1,
@@ -2189,24 +1763,24 @@ class FriendlyTank:
             ),
         )
 
-        bar_rect = pygame.Rect(
-            center[0] - 23,
-            center[1] - 28,
-            46,
+        bar = pygame.Rect(
+            center[0] - 22,
+            center[1] - 25,
+            44,
             5,
         )
 
         pygame.draw.rect(
             surface,
             BLACK,
-            bar_rect.inflate(2, 2),
+            bar.inflate(2, 2),
             border_radius=2,
         )
 
         pygame.draw.rect(
             surface,
             DARK_GREY,
-            bar_rect,
+            bar,
             border_radius=2,
         )
 
@@ -2214,16 +1788,17 @@ class FriendlyTank:
             surface,
             HEALTH_GREEN,
             (
-                bar_rect.x,
-                bar_rect.y,
+                bar.x,
+                bar.y,
                 round(
-                    bar_rect.width
+                    bar.width
                     * health_ratio
                 ),
-                bar_rect.height,
+                bar.height,
             ),
             border_radius=2,
         )
+
 
 # ============================================================
 # HELICOPTER
@@ -2372,10 +1947,8 @@ class Helicopter:
             return None
 
         self.last_shot_time = current_time
-
         self.muzzle_flash_until = (
-            pygame.time.get_ticks()
-            + 80
+            current_time + 80
         )
 
         return Projectile(
@@ -2406,7 +1979,6 @@ class Helicopter:
 
         if velocity.length_squared() > 0:
             facing = velocity.normalize()
-
         elif (
             self.last_target is not None
             and not self.last_target.dead
@@ -2416,26 +1988,14 @@ class Helicopter:
                 - self.position
             )
 
-            if (
-                target_direction.length_squared()
-                > 0
-            ):
-                facing = (
-                    target_direction.normalize()
-                )
+            if target_direction.length_squared() > 0:
+                facing = target_direction.normalize()
             else:
                 facing = pygame.Vector2(1, 0)
-
         else:
             facing = pygame.Vector2(
-                math.cos(
-                    self.angle
-                    + math.pi / 2
-                ),
-                math.sin(
-                    self.angle
-                    + math.pi / 2
-                ),
+                math.cos(self.angle + math.pi / 2),
+                math.sin(self.angle + math.pi / 2),
             )
 
         angle = math.atan2(
@@ -2458,7 +2018,7 @@ class Helicopter:
             18,
         )
 
-        # Tail boom.
+        # Tail boom
         tail_start = (
             center
             - facing * 8
@@ -2497,7 +2057,7 @@ class Helicopter:
             width=5,
         )
 
-        # Tail fin.
+        # Tail fin
         fin_points = [
             (
                 tail_end
@@ -2556,7 +2116,7 @@ class Helicopter:
             ],
         )
 
-        # Main fuselage.
+        # Main fuselage
         fuselage_points = [
             (-17, -9),
             (7, -11),
@@ -2599,7 +2159,7 @@ class Helicopter:
             MILITARY_GREEN,
         )
 
-        # Cockpit.
+        # Cockpit
         cockpit_center = (
             center
             + facing * 9
@@ -2643,7 +2203,7 @@ class Helicopter:
             WINDOW_BLUE,
         )
 
-        # Engine housing.
+        # Engine housing
         engine_center = (
             center
             - facing * 4
@@ -2669,7 +2229,7 @@ class Helicopter:
             6,
         )
 
-        # Landing skids.
+        # Landing skids
         for skid_offset in (-7, 7):
             skid_center = (
                 center
@@ -2720,7 +2280,7 @@ class Helicopter:
                 width=2,
             )
 
-        # Weapon pods.
+        # Weapon pods
         for pod_offset in (-10, 10):
             pod_center = (
                 center
@@ -2767,7 +2327,7 @@ class Helicopter:
                 width=2,
             )
 
-        # Main rotor.
+        # Main rotor mast
         pygame.draw.circle(
             surface,
             BLACK,
@@ -2860,10 +2420,10 @@ class Helicopter:
             3,
         )
 
-        # Tail rotor.
+        # Tail rotor
         tail_rotor_center = (
             tail_end
-            - side
+            - side * 1
         )
 
         tail_rotor_direction = pygame.Vector2(
@@ -2942,6 +2502,7 @@ class Helicopter:
             width=2,
         )
 
+        # Muzzle flash
         if (
             current_time
             < self.muzzle_flash_until
@@ -3528,7 +3089,6 @@ class Tower:
             return None
 
         self.last_shot_time = current_time
-
         self.last_visual_shot_time = (
             pygame.time.get_ticks()
         )
@@ -3829,9 +3389,7 @@ class Tower:
             border_radius=8,
         )
 
-        direction = (
-            self.get_target_direction()
-        )
+        direction = self.get_target_direction()
 
         side = pygame.Vector2(
             -direction.y,
@@ -4428,11 +3986,9 @@ class Tower:
 
         pygame.draw.circle(
             surface,
-            (
-                YELLOW
-                if self.mine_armed
-                else BLACK
-            ),
+            YELLOW
+            if self.mine_armed
+            else BLACK,
             center,
             4,
         )

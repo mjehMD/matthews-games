@@ -1,3 +1,8 @@
+Library
+/
+frontline_command_main_mouse_fixed.py
+
+
 from __future__ import annotations
 
 import asyncio
@@ -223,8 +228,7 @@ class FrontlineCommand:
         self.fullscreen = False
 
         self.screen = pygame.display.set_mode(
-            (GAME_WIDTH, GAME_HEIGHT),
-            pygame.SCALED,
+            (GAME_WIDTH, GAME_HEIGHT)
         )
 
         pygame.display.set_caption(WINDOW_TITLE)
@@ -425,10 +429,11 @@ class FrontlineCommand:
     def toggle_fullscreen(self) -> None:
         self.fullscreen = not self.fullscreen
 
-        flags = pygame.SCALED
-
-        if self.fullscreen:
-            flags |= pygame.FULLSCREEN
+        flags = (
+            pygame.FULLSCREEN
+            if self.fullscreen
+            else 0
+        )
 
         self.screen = pygame.display.set_mode(
             (GAME_WIDTH, GAME_HEIGHT),

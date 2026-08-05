@@ -7,6 +7,10 @@ import random
 from pathlib import Path
 
 import pygame
+from online_leaderboard import (
+    load_online_leaderboard,
+    submit_online_score,
+)
 
 
 # ============================================================
@@ -430,26 +434,46 @@ def add_leaderboard_score(
     score,
     wave,
 ):
-    leaderboard.append(
-        {
-            "name": name,
-            "score": score,
-            "wave": wave,
-        }
-    )
+    cleaned_name = str(name).strip()[:16] or "Player"
+    cleaned_score = max(0, int(score))
+    cleaned_wave = max(1, int(wave))
+
+    matching_entry = None
+
+    for entry in leaderboard:
+        if str(entry.get("name", "")).casefold() == cleaned_name.casefold():
+            matching_entry = entry
+            break
+
+    if matching_entry is None:
+        leaderboard.append(
+            {
+                "name": cleaned_name,
+                "score": cleaned_score,
+                "wave": cleaned_wave,
+            }
+        )
+    else:
+        old_result = (
+            int(matching_entry.get("score", 0)),
+            int(matching_entry.get("wave", 1)),
+        )
+        new_result = (cleaned_score, cleaned_wave)
+
+        if new_result > old_result:
+            matching_entry["name"] = cleaned_name
+            matching_entry["score"] = cleaned_score
+            matching_entry["wave"] = cleaned_wave
 
     leaderboard.sort(
         key=lambda item: (
-            item["score"],
-            item["wave"],
+            int(item["score"]),
+            int(item["wave"]),
         ),
         reverse=True,
     )
 
-    del leaderboard[
-        MAX_LEADERBOARD_ENTRIES:
-    ]
-
+    del leaderboard[MAX_LEADERBOARD_ENTRIES:]
     save_leaderboard(leaderboard)
 
 
@@ -4000,6 +4024,14 @@ class SpaceShooterGame:
             load_leaderboard()
         )
 
+        self.leaderboard_status = (
+            "Local leaderboard loaded."
+        )
+        self.leaderboard_loading = False
+        self.score_uploading = False
+        self.leaderboard_task = None
+        self.score_submit_task = None
+
         self.player_name = ""
         self.state = "name_entry"
 
@@ -4471,6 +4503,93 @@ class SpaceShooterGame:
         ):
             self.spawn_boss()
 
+    def open_leaderboard(self):
+        self.state = "leaderboard"
+        self.start_online_leaderboard_load()
+
+    def start_online_leaderboard_load(self):
+        if (
+            self.leaderboard_task is not None
+            and not self.leaderboard_task.done()
+        ):
+            return
+
+        self.leaderboard_loading = True
+        self.leaderboard_status = (
+            "Loading all-time online scores..."
+        )
+        self.leaderboard_task = asyncio.create_task(
+            load_online_leaderboard()
+        )
+
+    def start_online_score_submit(self):
+        if (
+            self.score_submit_task is not None
+            and not self.score_submit_task.done()
+        ):
+            return
+
+        self.score_uploading = True
+        self.leaderboard_status = (
+            "Saving score online..."
+        )
+        self.score_submit_task = asyncio.create_task(
+            submit_online_score(
+                self.player_name,
+                self.score,
+                self.wave,
+            )
+        )
+
+    def update_online_leaderboard_tasks(self):
+        if (
+            self.score_submit_task is not None
+            and self.score_submit_task.done()
+        ):
+            try:
+                success, message = (
+                    self.score_submit_task.result()
+                )
+            except Exception as error:
+                success = False
+                message = (
+                    "Online score error: "
+                    f"{error}"
+                )
+
+            self.score_submit_task = None
+            self.score_uploading = False
+            self.leaderboard_status = message
+
+            if success:
+                self.start_online_leaderboard_load()
+
+        if (
+            self.leaderboard_task is not None
+            and self.leaderboard_task.done()
+        ):
+            try:
+                online_scores, message = (
+                    self.leaderboard_task.result()
+                )
+            except Exception as error:
+                online_scores = []
+                message = (
+                    "Online leaderboard error: "
+                    f"{error}"
+                )
+
+            self.leaderboard_task = None
+            self.leaderboard_loading = False
+
+            if online_scores:
+                self.leaderboard = online_scores
+                save_leaderboard(self.leaderboard)
+            elif not self.leaderboard:
+                self.leaderboard = load_leaderboard()
+
+            self.leaderboard_status = message
+
     def finish_game(self):
         if not self.score_saved:
             add_leaderboard_score(
@@ -4481,6 +4600,7 @@ class SpaceShooterGame:
             )
 
             self.score_saved = True
+            self.start_online_score_submit()
 
         self.state = "game_over"
 
@@ -4604,7 +4724,7 @@ class SpaceShooterGame:
             event.type == pygame.KEYDOWN
             and event.key == pygame.K_l
         ):
-            self.state = "leaderboard"
+            self.open_leaderboard()
 
         elif (
             event.type == pygame.KEYDOWN
@@ -4618,7 +4738,7 @@ class SpaceShooterGame:
         elif self.leaderboard_button.clicked(
             event
         ):
-            self.state = "leaderboard"
+            self.open_leaderboard()
 
         elif self.instructions_button.clicked(
             event
@@ -4656,7 +4776,7 @@ class SpaceShooterGame:
             self.reset_game()
 
         elif event.key == pygame.K_l:
-            self.state = "leaderboard"
+            self.open_leaderboard()
 
         elif event.key in (
             pygame.K_m,
@@ -5996,6 +6116,23 @@ class SpaceShooterGame:
 
                 y += 46
 
+        status_colour = (
+            CYAN
+            if self.leaderboard_loading
+            or self.score_uploading
+            else GREY
+        )
+
+        draw_text(
+            self.screen,
+            self.leaderboard_status,
+            self.tiny_font,
+            status_colour,
+            GAME_WIDTH // 2,
+            600,
+            center=True,
+        )
+
         draw_text(
             self.screen,
             "Press Enter, M, or Escape to return",
@@ -6193,6 +6330,7 @@ class SpaceShooterGame:
                 pygame.time.get_ticks()
             )
 
+            self.update_online_leaderboard_tasks()
             self.update_buttons()
 
             for event in pygame.event.get():

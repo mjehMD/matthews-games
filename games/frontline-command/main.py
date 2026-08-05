@@ -47,6 +47,10 @@ from online_leaderboard import (
     load_online_leaderboard,
     submit_online_score,
 )
+from player_session import (
+    PlayerSession,
+    load_player_session,
+)
 from storage import add_score, load_leaderboard, save_leaderboard
 
 
@@ -255,8 +259,14 @@ class FrontlineCommand:
         self.tiny_font = pygame.font.Font(None, 17)
 
         self.running = True
-        self.state = "name_entry"
 
+        self.player_session = PlayerSession()
+        self.player_session_task = asyncio.create_task(
+            load_player_session()
+        )
+        self.account_message = "Checking website sign-in..."
+
+        self.state = "account_loading"
         self.player_name = ""
 
         self.difficulty_key = "easy"
@@ -1130,6 +1140,91 @@ class FrontlineCommand:
             if text.life <= 0:
                 self.floating_texts.remove(text)
 
+    def update_player_session_task(self) -> None:
+        if (
+            self.player_session_task is None
+            or not self.player_session_task.done()
+        ):
+            return
+
+        try:
+            self.player_session = (
+                self.player_session_task.result()
+            )
+        except Exception as error:
+            self.player_session = PlayerSession(
+                message=f"Account error: {error}"
+            )
+
+        self.player_session_task = None
+        self.account_message = self.player_session.message
+
+        if self.player_session.signed_in:
+            self.player_name = (
+                self.player_session.username
+            )
+            self.state = "difficulty"
+            self.start_online_leaderboard_load()
+        else:
+            self.state = "account_required"
+
+    def draw_account_screen(self) -> None:
+        panel = pygame.Rect(
+            GAME_WIDTH // 2 - 360,
+            GAME_HEIGHT // 2 - 175,
+            720,
+            350,
+        )
+
+        pygame.draw.rect(
+            self.screen,
+            PANEL,
+            panel,
+            border_radius=14,
+        )
+
+        pygame.draw.rect(
+            self.screen,
+            LIGHT_GREEN,
+            panel,
+            width=3,
+            border_radius=14,
+        )
+
+        title = (
+            "CHECKING ACCOUNT"
+            if self.state == "account_loading"
+            else "SIGN IN REQUIRED"
+        )
+
+        self.draw_text(
+            title,
+            self.title_font,
+            LIGHT_GREEN if self.state == "account_loading" else YELLOW,
+            GAME_WIDTH // 2,
+            panel.top + 75,
+            center=True,
+        )
+
+        self.draw_text(
+            self.account_message,
+            self.normal_font,
+            WHITE,
+            GAME_WIDTH // 2,
+            panel.top + 170,
+            center=True,
+        )
+
+        if self.state == "account_required":
+            self.draw_text(
+                "Return to Matthew's Games, sign in, then reopen this game.",
+                self.small_font,
+                LIGHT_GREY,
+                GAME_WIDTH // 2,
+                panel.top + 230,
+                center=True,
+            )
+
     def open_leaderboard(self) -> None:
         self.state = "leaderboard"
         self.start_online_leaderboard_load()
@@ -1169,6 +1264,8 @@ class FrontlineCommand:
                 self.wave,
                 str(self.difficulty["display_name"]),
                 self.kills,
+                self.player_session.user_id,
+                self.player_session.access_token,
             )
         )
 
@@ -1405,8 +1502,11 @@ class FrontlineCommand:
                 self.toggle_fullscreen()
                 return
 
-        if self.state == "name_entry":
-            self.handle_name_entry(event)
+        if self.state in (
+            "account_loading",
+            "account_required",
+        ):
+            return
 
         elif self.state == "difficulty":
             self.handle_difficulty(event)
@@ -2710,8 +2810,11 @@ class FrontlineCommand:
     def draw(self, current_time: int) -> None:
         self.draw_background()
 
-        if self.state == "name_entry":
-            self.draw_name_entry(current_time)
+        if self.state in (
+            "account_loading",
+            "account_required",
+        ):
+            self.draw_account_screen()
 
         elif self.state == "difficulty":
             self.draw_difficulty()
@@ -2736,6 +2839,7 @@ class FrontlineCommand:
             for event in pygame.event.get():
                 self.handle_event(event)
 
+            self.update_player_session_task()
             self.update_online_leaderboard_tasks()
             self.update(current_time)
             self.draw(current_time)

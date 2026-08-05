@@ -4,112 +4,50 @@ import asyncio
 import json
 import platform
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any
 
 
-# ============================================================
-# SUPABASE SETTINGS
-# ============================================================
-
-SUPABASE_PROJECT_URL = (
-    "https://bcarxudxfmsibvnteoaj.supabase.co"
-)
-
-SUPABASE_PUBLISHABLE_KEY = (
-    "sb_publishable_S7ki2S3tODs4shwWovSY6w_-2jknXXg"
-)
-
-SCORES_ENDPOINT = (
-    f"{SUPABASE_PROJECT_URL}/rest/v1/scores"
-)
+SUPABASE_PROJECT_URL = "https://bcarxudxfmsibvnteoaj.supabase.co"
+SUPABASE_PUBLISHABLE_KEY = "sb_publishable_S7ki2S3tODs4shwWovSY6w_-2jknXXg"
+SCORES_ENDPOINT = f"{SUPABASE_PROJECT_URL}/rest/v1/scores"
 
 GAME_NAME = "frontline-command"
 MAX_LEADERBOARD_ENTRIES = 10
+IS_WEB = sys.platform in ("emscripten", "wasi")
 
-VALID_DIFFICULTIES = {
-    "Easy",
-    "Medium",
-    "Hard",
-}
-
-IS_WEB = sys.platform in (
-    "emscripten",
-    "wasi",
-)
-
-
-# ============================================================
-# VALIDATION
-# ============================================================
 
 def clean_player_name(value: Any) -> str:
-    cleaned = str(value).strip()[:16]
-    return cleaned or "Player"
+    name = str(value).strip()[:16]
+    return name or "Player"
 
 
 def clean_score(value: Any) -> int:
     try:
-        return max(
-            0,
-            min(
-                100_000_000,
-                int(value),
-            ),
-        )
-    except (
-        TypeError,
-        ValueError,
-    ):
+        return max(0, min(100_000_000, int(value)))
+    except (TypeError, ValueError):
         return 0
 
 
 def clean_wave(value: Any) -> int:
     try:
-        return max(
-            1,
-            min(
-                100_000,
-                int(value),
-            ),
-        )
-    except (
-        TypeError,
-        ValueError,
-    ):
+        return max(1, min(100_000, int(value)))
+    except (TypeError, ValueError):
         return 1
+
+def clean_difficulty(value: Any) -> str:
+    difficulty = str(value).strip().title()
+    return difficulty if difficulty in {"Easy", "Medium", "Hard"} else "Easy"
 
 
 def clean_kills(value: Any) -> int:
     try:
-        return max(
-            0,
-            min(
-                100_000_000,
-                int(value),
-            ),
-        )
-    except (
-        TypeError,
-        ValueError,
-    ):
+        return max(0, min(100_000_000, int(value)))
+    except (TypeError, ValueError):
         return 0
 
 
-def clean_difficulty(value: Any) -> str:
-    cleaned = str(value).strip().title()
-
-    if cleaned not in VALID_DIFFICULTIES:
-        return "Easy"
-
-    return cleaned
-
-
-def clean_online_entries(
-    data: Any,
-) -> list[dict[str, Any]]:
+def clean_entries(data: Any) -> list[dict[str, Any]]:
     if not isinstance(data, list):
         return []
 
@@ -122,365 +60,163 @@ def clean_online_entries(
         entries.append(
             {
                 "name": clean_player_name(
-                    item.get(
-                        "player_name",
-                        item.get(
-                            "name",
-                            "Player",
-                        ),
-                    )
+                    item.get("player_name", "Player")
                 ),
-                "score": clean_score(
-                    item.get(
-                        "score",
-                        0,
-                    )
-                ),
-                "wave": clean_wave(
-                    item.get(
-                        "wave",
-                        1,
-                    )
-                ),
-                "difficulty": clean_difficulty(
-                    item.get(
-                        "difficulty",
-                        "Easy",
-                    )
-                ),
-                "kills": clean_kills(
-                    item.get(
-                        "kills",
-                        0,
-                    )
-                ),
+                "score": clean_score(item.get("score", 0)),
+                "wave": clean_wave(item.get("wave", 1)),
+                "difficulty": clean_difficulty(item.get("difficulty", "Easy")),
+                "kills": clean_kills(item.get("kills", 0)),
             }
         )
 
     entries.sort(
-        key=lambda entry: (
-            entry["score"],
-            entry["wave"],
-            entry["kills"],
-        ),
+        key=lambda entry: (entry["score"], entry["wave"], entry["kills"]),
         reverse=True,
     )
 
-    return entries[
-        :MAX_LEADERBOARD_ENTRIES
-    ]
+    return entries[:MAX_LEADERBOARD_ENTRIES]
 
 
-def request_headers(
-    include_prefer: bool = False,
-) -> dict[str, str]:
-    headers = {
-        "apikey": SUPABASE_PUBLISHABLE_KEY,
-        "Authorization": (
-            "Bearer "
-            + SUPABASE_PUBLISHABLE_KEY
-        ),
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
-
-    if include_prefer:
-        headers["Prefer"] = "return=minimal"
-
-    return headers
-
-
-# ============================================================
-# DESKTOP REQUESTS
-# ============================================================
-
-def desktop_request(
-    method: str,
-    url: str,
-    body: dict[str, Any] | None = None,
-) -> tuple[bool, int, str]:
-    request_body = None
-
-    if body is not None:
-        request_body = json.dumps(
-            body
-        ).encode("utf-8")
-
-    request = urllib.request.Request(
-        url=url,
-        data=request_body,
-        headers=request_headers(
-            include_prefer=(
-                method.upper() == "POST"
-            )
-        ),
-        method=method.upper(),
-    )
-
-    try:
-        with urllib.request.urlopen(
-            request,
-            timeout=8,
-        ) as response:
-            return (
-                True,
-                int(response.status),
-                response.read().decode(
-                    "utf-8"
-                ),
-            )
-
-    except urllib.error.HTTPError as error:
-        try:
-            message = error.read().decode(
-                "utf-8"
-            )
-        except Exception:
-            message = str(error)
-
-        return (
-            False,
-            int(error.code),
-            message,
-        )
-
-    except (
-        urllib.error.URLError,
-        TimeoutError,
-        OSError,
-    ) as error:
-        return (
-            False,
-            0,
-            str(error),
-        )
-
-
-# ============================================================
-# BROWSER REQUESTS
-# ============================================================
-
-_BROWSER_FETCH_INSTALLED = False
+_BROWSER_FETCH_READY = False
 
 
 def install_browser_fetch() -> None:
-    global _BROWSER_FETCH_INSTALLED
+    global _BROWSER_FETCH_READY
 
-    if (
-        not IS_WEB
-        or _BROWSER_FETCH_INSTALLED
-    ):
+    if not IS_WEB or _BROWSER_FETCH_READY:
         return
 
-    javascript = """
-        window.FrontlineLeaderboardAPI = {
+    platform.window.eval("""
+        window.MatthewsLeaderboardFetch = {
             request: function* (
                 method,
                 url,
                 apiKey,
-                bodyText
+                token,
+                bodyText,
+                prefer
             ) {
                 let finished = false;
-                let resultText = "";
+                let result = "";
+
+                const headers = {
+                    "apikey": apiKey,
+                    "Authorization": "Bearer " + token,
+                    "Accept": "application/json",
+                    "Content-Type": "application/json"
+                };
+
+                if (prefer) {
+                    headers["Prefer"] = prefer;
+                }
 
                 const options = {
                     method: method,
-                    headers: {
-                        "apikey": apiKey,
-                        "Authorization":
-                            "Bearer " + apiKey,
-                        "Accept":
-                            "application/json",
-                        "Content-Type":
-                            "application/json"
-                    }
+                    headers: headers
                 };
 
-                if (method === "POST") {
-                    options.headers["Prefer"] =
-                        "return=minimal";
-
+                if (bodyText) {
                     options.body = bodyText;
                 }
 
                 fetch(url, options)
-                    .then(async (response) => {
-                        const text =
-                            await response.text();
-
-                        resultText = JSON.stringify({
-                            ok: response.ok,
-                            status: response.status,
-                            text: text
-                        });
-
-                        finished = true;
-                    })
-                    .catch((error) => {
-                        resultText = JSON.stringify({
-                            ok: false,
-                            status: 0,
-                            text: String(error)
-                        });
-
-                        finished = true;
+                .then(async response => {
+                    result = JSON.stringify({
+                        ok: response.ok,
+                        status: response.status,
+                        text: await response.text()
                     });
+                    finished = true;
+                })
+                .catch(error => {
+                    result = JSON.stringify({
+                        ok: false,
+                        status: 0,
+                        text: String(error)
+                    });
+                    finished = true;
+                });
 
                 while (!finished) {
                     yield;
                 }
 
-                yield resultText;
+                yield result;
             }
         };
-    """
+    """)
 
-    platform.window.eval(
-        javascript
-    )
+    _BROWSER_FETCH_READY = True
 
-    _BROWSER_FETCH_INSTALLED = True
-
-
-async def browser_request(
-    method: str,
-    url: str,
-    body: dict[str, Any] | None = None,
-) -> tuple[bool, int, str]:
-    install_browser_fetch()
-
-    body_text = ""
-
-    if body is not None:
-        body_text = json.dumps(
-            body
-        )
-
-    try:
-        raw_result = await platform.jsiter(
-            platform.window
-            .FrontlineLeaderboardAPI
-            .request(
-                method.upper(),
-                url,
-                SUPABASE_PUBLISHABLE_KEY,
-                body_text,
-            )
-        )
-
-        result = json.loads(
-            str(raw_result)
-        )
-
-        return (
-            bool(
-                result.get(
-                    "ok",
-                    False,
-                )
-            ),
-            int(
-                result.get(
-                    "status",
-                    0,
-                )
-            ),
-            str(
-                result.get(
-                    "text",
-                    "",
-                )
-            ),
-        )
-
-    except Exception as error:
-        return (
-            False,
-            0,
-            str(error),
-        )
-
-
-# ============================================================
-# SHARED REQUEST FUNCTION
-# ============================================================
 
 async def make_request(
     method: str,
     url: str,
+    access_token: str = "",
     body: dict[str, Any] | None = None,
+    prefer: str = "",
 ) -> tuple[bool, int, str]:
-    if IS_WEB:
-        return await browser_request(
-            method,
-            url,
-            body,
+    if not IS_WEB:
+        return (
+            False,
+            0,
+            "Online leaderboards require the website version.",
         )
 
-    return await asyncio.to_thread(
-        desktop_request,
-        method,
-        url,
-        body,
-    )
+    install_browser_fetch()
 
+    token = access_token or SUPABASE_PUBLISHABLE_KEY
+    body_text = json.dumps(body) if body is not None else ""
 
-# ============================================================
-# PUBLIC FUNCTIONS
-# ============================================================
+    try:
+        raw_result = await platform.jsiter(
+            platform.window.MatthewsLeaderboardFetch.request(
+                method.upper(),
+                url,
+                SUPABASE_PUBLISHABLE_KEY,
+                token,
+                body_text,
+                prefer,
+            )
+        )
+
+        result = json.loads(str(raw_result))
+
+        return (
+            bool(result.get("ok", False)),
+            int(result.get("status", 0)),
+            str(result.get("text", "")),
+        )
+    except Exception as error:
+        return False, 0, str(error)
+
 
 async def load_online_leaderboard(
 ) -> tuple[list[dict[str, Any]], str]:
     query = urllib.parse.urlencode(
         {
-            "select": (
-                "player_name,score,wave,"
-                "difficulty,kills"
-            ),
-            "game": (
-                f"eq.{GAME_NAME}"
-            ),
-            "order": (
-                "score.desc,"
-                "wave.desc,"
-                "kills.desc"
-            ),
-            "limit": (
-                MAX_LEADERBOARD_ENTRIES
-            ),
+            "select": "player_name,score,wave,difficulty,kills",
+            "game": f"eq.{GAME_NAME}",
+            "order": "score.desc,wave.desc,kills.desc",
+            "limit": MAX_LEADERBOARD_ENTRIES,
         }
     )
 
-    success, status, response_text = (
-        await make_request(
-            "GET",
-            f"{SCORES_ENDPOINT}?{query}",
-        )
+    success, status, response_text = await make_request(
+        "GET",
+        f"{SCORES_ENDPOINT}?{query}",
     )
 
     if not success:
-        return (
-            [],
-            (
-                "Could not load online "
-                f"leaderboard ({status})."
-            ),
-        )
+        return [], f"Could not load leaderboard ({status})."
 
     try:
-        data = json.loads(
-            response_text
+        return (
+            clean_entries(json.loads(response_text)),
+            "Online leaderboard loaded.",
         )
     except json.JSONDecodeError:
-        return (
-            [],
-            "Leaderboard returned invalid data.",
-        )
-
-    return (
-        clean_online_entries(data),
-        "Online leaderboard loaded.",
-    )
+        return [], "Leaderboard returned invalid data."
 
 
 async def submit_online_score(
@@ -489,49 +225,86 @@ async def submit_online_score(
     wave: int,
     difficulty: str,
     kills: int,
+    user_id: str,
+    access_token: str,
 ) -> tuple[bool, str]:
-    entry = {
-        "game": GAME_NAME,
-        "player_name": clean_player_name(
-            player_name
-        ),
-        "score": clean_score(
-            score
-        ),
-        "wave": clean_wave(
-            wave
-        ),
-        "difficulty": clean_difficulty(
-            difficulty
-        ),
-        "kills": clean_kills(
-            kills
-        ),
-    }
+    if not user_id or not access_token:
+        return False, "A signed-in account is required."
 
-    success, status, response_text = (
-        await make_request(
-            "POST",
-            SCORES_ENDPOINT,
-            entry,
-        )
+    new_score = clean_score(score)
+    new_wave = clean_wave(wave)
+
+    existing_query = urllib.parse.urlencode(
+        {
+            "select": "player_name,score,wave,difficulty,kills",
+            "game": f"eq.{GAME_NAME}",
+            "user_id": f"eq.{user_id}",
+            "limit": 1,
+        }
     )
 
-    if success and status in (
-        200,
-        201,
-        204,
-    ):
-        return (
-            True,
-            "Score saved online.",
+    success, status, response_text = await make_request(
+        "GET",
+        f"{SCORES_ENDPOINT}?{existing_query}",
+        access_token,
+    )
+
+    if not success:
+        return False, f"Could not check current score ({status})."
+
+    try:
+        existing_rows = json.loads(response_text)
+    except json.JSONDecodeError:
+        existing_rows = []
+
+    payload = {
+        "game": GAME_NAME,
+        "user_id": user_id,
+        "player_name": clean_player_name(player_name),
+        "score": new_score,
+        "wave": new_wave,
+        "difficulty": clean_difficulty(difficulty),
+        "kills": clean_kills(kills),
+    }
+
+    if existing_rows:
+        existing = clean_entries(existing_rows)[0]
+
+        existing_key = (existing["score"], existing["wave"], existing["kills"])
+        entry = payload
+        new_key = (entry["score"], entry["wave"], entry["kills"])
+
+        if new_key <= existing_key:
+            return True, "Your existing best score is higher."
+
+        update_query = urllib.parse.urlencode(
+            {
+                "game": f"eq.{GAME_NAME}",
+                "user_id": f"eq.{user_id}",
+            }
         )
+
+        success, status, response_text = await make_request(
+            "PATCH",
+            f"{SCORES_ENDPOINT}?{update_query}",
+            access_token,
+            payload,
+            "return=minimal",
+        )
+    else:
+        success, status, response_text = await make_request(
+            "POST",
+            SCORES_ENDPOINT,
+            access_token,
+            payload,
+            "return=minimal",
+        )
+
+    if success and status in (200, 201, 204):
+        return True, "Personal best saved online."
 
     return (
         False,
-        (
-            "Score was not saved online "
-            f"({status}): "
-            f"{response_text.strip()}"
-        ),
+        f"Score was not saved online ({status}): "
+        f"{response_text.strip()}",
     )

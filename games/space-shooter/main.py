@@ -11,6 +11,10 @@ from online_leaderboard import (
     load_online_leaderboard,
     submit_online_score,
 )
+from player_session import (
+    PlayerSession,
+    load_player_session,
+)
 
 
 # ============================================================
@@ -4032,8 +4036,13 @@ class SpaceShooterGame:
         self.leaderboard_task = None
         self.score_submit_task = None
 
+        self.player_session = PlayerSession()
+        self.player_session_task = asyncio.create_task(
+            load_player_session()
+        )
+        self.account_message = "Checking website sign-in..."
         self.player_name = ""
-        self.state = "name_entry"
+        self.state = "account_loading"
 
         self.score = 0
         self.wave = 1
@@ -4503,6 +4512,87 @@ class SpaceShooterGame:
         ):
             self.spawn_boss()
 
+    def update_player_session_task(self):
+        if (
+            self.player_session_task is None
+            or not self.player_session_task.done()
+        ):
+            return
+
+        try:
+            self.player_session = (
+                self.player_session_task.result()
+            )
+        except Exception as error:
+            self.player_session = PlayerSession(
+                message=f"Account error: {error}"
+            )
+
+        self.player_session_task = None
+        self.account_message = self.player_session.message
+
+        if self.player_session.signed_in:
+            self.player_name = (
+                self.player_session.username
+            )
+            self.state = "menu"
+            self.start_online_leaderboard_load()
+        else:
+            self.state = "account_required"
+
+    def draw_account_screen(self):
+        panel = pygame.Rect(
+            GAME_WIDTH // 2 - 360,
+            GAME_HEIGHT // 2 - 185,
+            720,
+            370,
+        )
+
+        draw_panel(
+            self.screen,
+            panel,
+            fill=(10, 22, 52),
+            border=CYAN,
+            border_width=3,
+        )
+
+        title = (
+            "CHECKING ACCOUNT"
+            if self.state == "account_loading"
+            else "SIGN IN REQUIRED"
+        )
+
+        draw_text(
+            self.screen,
+            title,
+            self.title_font,
+            CYAN if self.state == "account_loading" else YELLOW,
+            GAME_WIDTH // 2,
+            panel.top + 75,
+            center=True,
+        )
+
+        draw_text(
+            self.screen,
+            self.account_message,
+            self.normal_font,
+            WHITE,
+            GAME_WIDTH // 2,
+            panel.top + 175,
+            center=True,
+        )
+
+        if self.state == "account_required":
+            draw_text(
+                self.screen,
+                "Return to Matthew's Games, sign in, then reopen this game.",
+                self.small_font,
+                LIGHT_GREY,
+                GAME_WIDTH // 2,
+                panel.top + 235,
+                center=True,
+            )
+
     def open_leaderboard(self):
         self.state = "leaderboard"
         self.start_online_leaderboard_load()
@@ -4538,6 +4628,8 @@ class SpaceShooterGame:
                 self.player_name,
                 self.score,
                 self.wave,
+                self.player_session.user_id,
+                self.player_session.access_token,
             )
         )
 
@@ -4648,8 +4740,11 @@ class SpaceShooterGame:
                 self.toggle_fullscreen()
                 return
 
-        if self.state == "name_entry":
-            self.handle_name_entry(event)
+        if self.state in (
+            "account_loading",
+            "account_required",
+        ):
+            return
 
         elif self.state == "menu":
             self.handle_menu(event)
@@ -6330,6 +6425,7 @@ class SpaceShooterGame:
                 pygame.time.get_ticks()
             )
 
+            self.update_player_session_task()
             self.update_online_leaderboard_tasks()
             self.update_buttons()
 
@@ -6352,10 +6448,11 @@ class SpaceShooterGame:
 
             self.draw_background()
 
-            if self.state == "name_entry":
-                self.draw_name_entry(
-                    current_time
-                )
+            if self.state in (
+                "account_loading",
+                "account_required",
+            ):
+                self.draw_account_screen()
 
             elif self.state == "menu":
                 self.draw_menu()

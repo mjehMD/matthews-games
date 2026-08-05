@@ -1,8 +1,3 @@
-Library
-/
-frontline_command_main_mouse_fixed.py
-
-
 from __future__ import annotations
 
 import asyncio
@@ -227,9 +222,27 @@ class FrontlineCommand:
 
         self.fullscreen = False
 
-        self.screen = pygame.display.set_mode(
+        # Draw at the original logical resolution, then present it
+        # using integer-only scaling. This prevents blurry text.
+        self.display_surface = pygame.display.set_mode(
             (GAME_WIDTH, GAME_HEIGHT)
         )
+
+        self.screen = pygame.Surface(
+            (GAME_WIDTH, GAME_HEIGHT)
+        ).convert()
+
+        self.display_scale = 1
+        self.display_offset_x = 0
+        self.display_offset_y = 0
+        self.display_rect = pygame.Rect(
+            0,
+            0,
+            GAME_WIDTH,
+            GAME_HEIGHT,
+        )
+
+        self.update_display_layout()
 
         pygame.display.set_caption(WINDOW_TITLE)
 
@@ -426,19 +439,114 @@ class FrontlineCommand:
             pygame.time.get_ticks() + duration_ms
         )
 
+    def update_display_layout(self) -> None:
+        display_width = self.display_surface.get_width()
+        display_height = self.display_surface.get_height()
+
+        scale_x = display_width // GAME_WIDTH
+        scale_y = display_height // GAME_HEIGHT
+
+        self.display_scale = max(
+            1,
+            min(scale_x, scale_y),
+        )
+
+        rendered_width = GAME_WIDTH * self.display_scale
+        rendered_height = GAME_HEIGHT * self.display_scale
+
+        self.display_offset_x = (
+            display_width - rendered_width
+        ) // 2
+
+        self.display_offset_y = (
+            display_height - rendered_height
+        ) // 2
+
+        self.display_rect = pygame.Rect(
+            self.display_offset_x,
+            self.display_offset_y,
+            rendered_width,
+            rendered_height,
+        )
+
+    def display_to_game_position(
+        self,
+        position: tuple[int, int],
+    ) -> tuple[int, int]:
+        display_x, display_y = position
+
+        if not self.display_rect.collidepoint(
+            display_x,
+            display_y,
+        ):
+            return (-10000, -10000)
+
+        game_x = (
+            display_x - self.display_offset_x
+        ) // self.display_scale
+
+        game_y = (
+            display_y - self.display_offset_y
+        ) // self.display_scale
+
+        return int(game_x), int(game_y)
+
+    def convert_mouse_event(
+        self,
+        event: pygame.event.Event,
+    ) -> pygame.event.Event:
+        if not hasattr(event, "pos"):
+            return event
+
+        converted_data = dict(event.dict)
+        converted_data["pos"] = (
+            self.display_to_game_position(
+                event.pos
+            )
+        )
+
+        return pygame.event.Event(
+            event.type,
+            converted_data,
+        )
+
+    def present_frame(self) -> None:
+        self.display_surface.fill((0, 0, 0))
+
+        if self.display_scale == 1:
+            rendered_surface = self.screen
+        else:
+            rendered_surface = pygame.transform.scale(
+                self.screen,
+                self.display_rect.size,
+            )
+
+        self.display_surface.blit(
+            rendered_surface,
+            self.display_rect.topleft,
+        )
+
+        pygame.display.flip()
+
     def toggle_fullscreen(self) -> None:
         self.fullscreen = not self.fullscreen
 
-        flags = (
-            pygame.FULLSCREEN
-            if self.fullscreen
-            else 0
-        )
+        if self.fullscreen:
+            display_info = pygame.display.Info()
 
-        self.screen = pygame.display.set_mode(
-            (GAME_WIDTH, GAME_HEIGHT),
-            flags,
-        )
+            self.display_surface = pygame.display.set_mode(
+                (
+                    display_info.current_w,
+                    display_info.current_h,
+                ),
+                pygame.FULLSCREEN,
+            )
+        else:
+            self.display_surface = pygame.display.set_mode(
+                (GAME_WIDTH, GAME_HEIGHT)
+            )
+
+        self.update_display_layout()
 
         pygame.display.set_caption(WINDOW_TITLE)
 
@@ -1281,6 +1389,8 @@ class FrontlineCommand:
             self.selected_tower = None
 
     def handle_event(self, event: pygame.event.Event) -> None:
+        event = self.convert_mouse_event(event)
+
         if event.type == pygame.QUIT:
             self.running = False
             return
@@ -1327,7 +1437,9 @@ class FrontlineCommand:
     # ========================================================
 
     def update_buttons(self) -> None:
-        mouse = pygame.mouse.get_pos()
+        mouse = self.display_to_game_position(
+            pygame.mouse.get_pos()
+        )
 
         for button in (
             self.easy_button,
@@ -1498,7 +1610,11 @@ class FrontlineCommand:
         if tower_type is None:
             return
 
-        tile = self.screen_to_tile(pygame.mouse.get_pos())
+        tile = self.screen_to_tile(
+            self.display_to_game_position(
+                pygame.mouse.get_pos()
+            )
+        )
 
         if tile is None:
             return
@@ -2609,7 +2725,7 @@ class FrontlineCommand:
         elif self.state == "leaderboard":
             self.draw_leaderboard()
 
-        pygame.display.flip()
+        self.present_frame()
 
     async def run(self) -> None:
         while self.running:

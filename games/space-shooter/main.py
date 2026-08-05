@@ -48,6 +48,14 @@ POWERUP_DURATION_MS = 9000
 
 MAX_EXPLOSION_PARTICLES = 400
 
+HARD_STARTING_AMMO = 85
+HARD_MAX_AMMO = 120
+HARD_AMMO_CRATE_AMOUNT = 35
+HARD_AMMO_CRATE_MIN_DELAY_MS = 12000
+HARD_AMMO_CRATE_MAX_DELAY_MS = 19000
+HARD_LOW_AMMO_THRESHOLD = 22
+HARD_ZERO_AMMO_GRACE_MS = 8000
+
 
 # ============================================================
 # COLOURS
@@ -3686,6 +3694,7 @@ class PowerUp:
         "triple_shot",
         "shield",
         "extra_life",
+        "ammo",
     )
 
     COLOURS = {
@@ -3693,6 +3702,7 @@ class PowerUp:
         "triple_shot": PURPLE,
         "shield": CYAN,
         "extra_life": GREEN,
+        "ammo": YELLOW,
     }
 
     LABELS = {
@@ -3700,6 +3710,7 @@ class PowerUp:
         "triple_shot": "3",
         "shield": "S",
         "extra_life": "+",
+        "ammo": "A",
     }
 
     def __init__(
@@ -4044,6 +4055,14 @@ class SpaceShooterGame:
         self.player_name = ""
         self.state = "account_loading"
 
+        self.game_mode = "easy"
+
+        self.ammo = HARD_STARTING_AMMO
+        self.max_ammo = HARD_MAX_AMMO
+        self.next_ammo_crate_time = 0
+        self.zero_ammo_since = 0
+        self.ammo_warning_until = 0
+
         self.score = 0
         self.wave = 1
         self.wave_kills = 0
@@ -4150,6 +4169,30 @@ class SpaceShooterGame:
             "M",
         )
 
+        self.easy_mode_button = Button(
+            (
+                GAME_WIDTH // 2 - 360,
+                350,
+                300,
+                110,
+            ),
+            "EASY MODE",
+            self.medium_font,
+            "1",
+        )
+
+        self.hard_mode_button = Button(
+            (
+                GAME_WIDTH // 2 + 60,
+                350,
+                300,
+                110,
+            ),
+            "HARD MODE",
+            self.medium_font,
+            "2",
+        )
+
     def get_wave_goal(self, wave):
         if (
             wave
@@ -4233,10 +4276,16 @@ class SpaceShooterGame:
             WINDOW_TITLE
         )
 
-    def reset_game(self):
+    def reset_game(self, selected_mode=None):
         current_time = (
             pygame.time.get_ticks()
         )
+
+        if selected_mode in (
+            "easy",
+            "hard",
+        ):
+            self.game_mode = selected_mode
 
         self.player.reset()
 
@@ -4248,6 +4297,25 @@ class SpaceShooterGame:
         self.floating_texts.clear()
 
         self.boss = None
+
+        self.ammo = (
+            HARD_STARTING_AMMO
+            if self.game_mode == "hard"
+            else HARD_MAX_AMMO
+        )
+
+        self.max_ammo = HARD_MAX_AMMO
+
+        self.next_ammo_crate_time = (
+            current_time
+            + random.randint(
+                HARD_AMMO_CRATE_MIN_DELAY_MS,
+                HARD_AMMO_CRATE_MAX_DELAY_MS,
+            )
+        )
+
+        self.zero_ammo_since = 0
+        self.ammo_warning_until = 0
 
         self.score = 0
         self.wave = 1
@@ -4277,6 +4345,143 @@ class SpaceShooterGame:
 
         self.score_saved = False
         self.state = "playing"
+
+    def schedule_next_ammo_crate(
+        self,
+        current_time,
+        urgent=False,
+    ):
+        if urgent:
+            delay = random.randint(
+                3500,
+                6500,
+            )
+        else:
+            delay = random.randint(
+                HARD_AMMO_CRATE_MIN_DELAY_MS,
+                HARD_AMMO_CRATE_MAX_DELAY_MS,
+            )
+
+        self.next_ammo_crate_time = (
+            current_time + delay
+        )
+
+    def spawn_ammo_crate(
+        self,
+        current_time,
+    ):
+        if self.game_mode != "hard":
+            return
+
+        if any(
+            powerup.power_type == "ammo"
+            for powerup in self.powerups
+        ):
+            return
+
+        self.powerups.append(
+            PowerUp(
+                random.randint(
+                    70,
+                    GAME_WIDTH - 70,
+                ),
+                -30,
+                forced_type="ammo",
+            )
+        )
+
+        self.schedule_next_ammo_crate(
+            current_time,
+            urgent=(
+                self.ammo
+                <= HARD_LOW_AMMO_THRESHOLD
+            ),
+        )
+
+    def update_ammo_system(
+        self,
+        current_time,
+    ):
+        if self.game_mode != "hard":
+            return
+
+        ammo_crate_present = any(
+            powerup.power_type == "ammo"
+            for powerup in self.powerups
+        )
+
+        if (
+            self.ammo
+            <= HARD_LOW_AMMO_THRESHOLD
+            and not ammo_crate_present
+            and current_time
+            >= min(
+                self.next_ammo_crate_time,
+                current_time + 1,
+            )
+        ):
+            self.spawn_ammo_crate(
+                current_time
+            )
+
+        elif (
+            current_time
+            >= self.next_ammo_crate_time
+            and not ammo_crate_present
+        ):
+            self.spawn_ammo_crate(
+                current_time
+            )
+
+        if self.ammo > 0:
+            self.zero_ammo_since = 0
+            return
+
+        if self.zero_ammo_since == 0:
+            self.zero_ammo_since = current_time
+            self.ammo_warning_until = (
+                current_time
+                + HARD_ZERO_AMMO_GRACE_MS
+            )
+
+            if not ammo_crate_present:
+                self.spawn_ammo_crate(
+                    current_time
+                )
+
+        if (
+            current_time
+            - self.zero_ammo_since
+            >= HARD_ZERO_AMMO_GRACE_MS
+        ):
+            self.finish_game()
+
+    def fire_player_weapon(
+        self,
+        current_time,
+    ):
+        if (
+            self.game_mode == "hard"
+            and self.ammo <= 0
+        ):
+            return
+
+        shots = self.player.shoot(
+            current_time
+        )
+
+        if not shots:
+            return
+
+        self.bullets.extend(
+            shots
+        )
+
+        if self.game_mode == "hard":
+            self.ammo = max(
+                0,
+                self.ammo - 1,
+            )
 
     def create_explosion(
         self,
@@ -4380,10 +4585,19 @@ class SpaceShooterGame:
         self,
         current_time,
     ):
+        mode_delay_bonus = (
+            170
+            if self.game_mode == "hard"
+            else 0
+        )
+
         spawn_delay = max(
-            600,
+            430
+            if self.game_mode == "hard"
+            else 600,
             ENEMY_BASE_SPAWN_DELAY_MS
-            - (self.wave - 1) * 30,
+            - (self.wave - 1) * 30
+            - mode_delay_bonus,
         )
 
         if (
@@ -4394,8 +4608,14 @@ class SpaceShooterGame:
             return
 
         max_enemies = min(
-            10,
-            3 + self.wave // 2,
+            14
+            if self.game_mode == "hard"
+            else 10,
+            (
+                5 + self.wave // 2
+                if self.game_mode == "hard"
+                else 3 + self.wave // 2
+            ),
         )
 
         if (
@@ -4478,6 +4698,16 @@ class SpaceShooterGame:
                 PowerUp(
                     enemy.rect.centerx,
                     enemy.rect.centery,
+                    forced_type=(
+                        random.choice(
+                            (
+                                "rapid_fire",
+                                "triple_shot",
+                                "shield",
+                                "extra_life",
+                            )
+                        )
+                    ),
                 )
             )
 
@@ -4749,6 +4979,11 @@ class SpaceShooterGame:
         elif self.state == "menu":
             self.handle_menu(event)
 
+        elif self.state == "mode_select":
+            self.handle_mode_select(
+                event
+            )
+
         elif self.state == "playing":
             if (
                 event.type == pygame.KEYDOWN
@@ -4813,7 +5048,7 @@ class SpaceShooterGame:
             event.type == pygame.KEYDOWN
             and event.key == pygame.K_SPACE
         ):
-            self.reset_game()
+            self.state = "mode_select"
 
         elif (
             event.type == pygame.KEYDOWN
@@ -4828,7 +5063,7 @@ class SpaceShooterGame:
             self.state = "instructions"
 
         elif self.play_button.clicked(event):
-            self.reset_game()
+            self.state = "mode_select"
 
         elif self.leaderboard_button.clicked(
             event
@@ -4839,6 +5074,44 @@ class SpaceShooterGame:
             event
         ):
             self.state = "instructions"
+
+    def handle_mode_select(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key in (
+                pygame.K_1,
+                pygame.K_e,
+            ):
+                self.reset_game(
+                    "easy"
+                )
+
+            elif event.key in (
+                pygame.K_2,
+                pygame.K_h,
+            ):
+                self.reset_game(
+                    "hard"
+                )
+
+            elif event.key in (
+                pygame.K_ESCAPE,
+                pygame.K_m,
+            ):
+                self.state = "menu"
+
+        elif self.easy_mode_button.clicked(
+            event
+        ):
+            self.reset_game(
+                "easy"
+            )
+
+        elif self.hard_mode_button.clicked(
+            event
+        ):
+            self.reset_game(
+                "hard"
+            )
 
     def handle_paused(self, event):
         if event.type == pygame.KEYDOWN:
@@ -4890,6 +5163,8 @@ class SpaceShooterGame:
             self.resume_button,
             self.restart_button,
             self.menu_button,
+            self.easy_mode_button,
+            self.hard_mode_button,
         ):
             button.update(mouse_pos)
 
@@ -4916,10 +5191,8 @@ class SpaceShooterGame:
         self.player.update(keys)
 
         if keys[pygame.K_SPACE]:
-            self.bullets.extend(
-                self.player.shoot(
-                    current_time
-                )
+            self.fire_player_weapon(
+                current_time
             )
 
         for star in self.stars:
@@ -4941,6 +5214,10 @@ class SpaceShooterGame:
         )
 
         self.update_powerups(
+            current_time
+        )
+
+        self.update_ammo_system(
             current_time
         )
 
@@ -5306,10 +5583,24 @@ class SpaceShooterGame:
             ):
                 continue
 
-            powerup.apply(
-                self.player,
-                current_time,
-            )
+            if powerup.power_type == "ammo":
+                self.ammo = min(
+                    self.max_ammo,
+                    self.ammo
+                    + HARD_AMMO_CRATE_AMOUNT,
+                )
+
+                self.zero_ammo_since = 0
+                self.ammo_warning_until = 0
+
+                self.schedule_next_ammo_crate(
+                    current_time
+                )
+            else:
+                powerup.apply(
+                    self.player,
+                    current_time,
+                )
 
             self.create_explosion(
                 powerup.rect.centerx,
@@ -5508,8 +5799,10 @@ class SpaceShooterGame:
         hud_rect = pygame.Rect(
             18,
             16,
-            270,
-            154,
+            290,
+            184
+            if self.game_mode == "hard"
+            else 154,
         )
 
         draw_panel(
@@ -5554,6 +5847,24 @@ class SpaceShooterGame:
             hud_rect.x + 18,
             hud_rect.y + 109,
         )
+
+        if self.game_mode == "hard":
+            ammo_colour = (
+                RED
+                if self.ammo <= 10
+                else YELLOW
+                if self.ammo <= HARD_LOW_AMMO_THRESHOLD
+                else WHITE
+            )
+
+            draw_text(
+                self.screen,
+                f"Ammo  {self.ammo}/{self.max_ammo}",
+                self.small_font,
+                ammo_colour,
+                hud_rect.x + 18,
+                hud_rect.y + 138,
+            )
 
         draw_text(
             self.screen,
@@ -5641,6 +5952,63 @@ class SpaceShooterGame:
                 WHITE,
                 progress_rect.centerx,
                 progress_rect.bottom + 18,
+                center=True,
+            )
+
+        draw_text(
+            self.screen,
+            self.game_mode.upper(),
+            self.tiny_font,
+            YELLOW if self.game_mode == "hard" else GREEN,
+            hud_rect.right - 18,
+            hud_rect.y + 18,
+            right=True,
+        )
+
+        if (
+            self.game_mode == "hard"
+            and self.zero_ammo_since > 0
+            and self.state == "playing"
+        ):
+            remaining_seconds = max(
+                0,
+                math.ceil(
+                    (
+                        HARD_ZERO_AMMO_GRACE_MS
+                        - (
+                            current_time
+                            - self.zero_ammo_since
+                        )
+                    )
+                    / 1000
+                ),
+            )
+
+            warning_rect = pygame.Rect(
+                GAME_WIDTH // 2 - 245,
+                GAME_HEIGHT - 95,
+                490,
+                58,
+            )
+
+            draw_panel(
+                self.screen,
+                warning_rect,
+                fill=(60, 12, 20),
+                border=RED,
+                border_width=3,
+            )
+
+            draw_text(
+                self.screen,
+                (
+                    "OUT OF AMMO - COLLECT A CRATE "
+                    f"({remaining_seconds})"
+                ),
+                self.normal_font,
+                WHITE,
+                warning_rect.centerx,
+                warning_rect.centery,
                 center=True,
             )
 
@@ -5898,6 +6266,95 @@ class SpaceShooterGame:
             center=True,
         )
 
+    def draw_mode_select(self):
+        draw_text(
+            self.screen,
+            "SELECT GAME MODE",
+            self.title_font,
+            WHITE,
+            GAME_WIDTH // 2,
+            120,
+            center=True,
+        )
+
+        draw_text(
+            self.screen,
+            f"Pilot: {self.player_name}",
+            self.normal_font,
+            LIGHT_BLUE,
+            GAME_WIDTH // 2,
+            205,
+            center=True,
+        )
+
+        self.easy_mode_button.draw(
+            self.screen
+        )
+
+        self.hard_mode_button.draw(
+            self.screen
+        )
+
+        draw_text(
+            self.screen,
+            "Current Space Shooter rules",
+            self.small_font,
+            GREEN,
+            self.easy_mode_button.rect.centerx,
+            490,
+            center=True,
+        )
+
+        draw_text(
+            self.screen,
+            "Unlimited ammunition",
+            self.tiny_font,
+            LIGHT_GREY,
+            self.easy_mode_button.rect.centerx,
+            525,
+            center=True,
+        )
+
+        draw_text(
+            self.screen,
+            "Limited ammo and ammo crates",
+            self.small_font,
+            YELLOW,
+            self.hard_mode_button.rect.centerx,
+            490,
+            center=True,
+        )
+
+        draw_text(
+            self.screen,
+            "Run out for 8 seconds and lose",
+            self.tiny_font,
+            LIGHT_GREY,
+            self.hard_mode_button.rect.centerx,
+            525,
+            center=True,
+        )
+
+        draw_text(
+            self.screen,
+            "Hard mode also sends enemies faster",
+            self.tiny_font,
+            LIGHT_GREY,
+            GAME_WIDTH // 2,
+            595,
+            center=True,
+        )
+
+        draw_text(
+            self.screen,
+            "1: Easy   2: Hard   Escape: Back",
+            self.small_font,
+            GREY,
+            GAME_WIDTH // 2,
+            650,
+            center=True,
+        )
+
     def draw_pause(self):
         overlay = pygame.Surface(
             (
@@ -5976,6 +6433,16 @@ class SpaceShooterGame:
             RED,
             GAME_WIDTH // 2,
             180,
+            center=True,
+        )
+
+        draw_text(
+            self.screen,
+            f"Mode: {self.game_mode.title()}",
+            self.normal_font,
+            LIGHT_BLUE,
+            GAME_WIDTH // 2,
+            245,
             center=True,
         )
 

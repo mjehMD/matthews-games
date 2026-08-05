@@ -4414,15 +4414,16 @@ class SpaceShooterGame:
             self.ammo
             <= HARD_LOW_AMMO_THRESHOLD
             and not ammo_crate_present
-            and current_time
-            >= min(
-                self.next_ammo_crate_time,
-                current_time + 1,
-            )
         ):
-            self.spawn_ammo_crate(
-                current_time
+            emergency_time = (
+                self.next_ammo_crate_time
+                - 7000
             )
+
+            if current_time >= emergency_time:
+                self.spawn_ammo_crate(
+                    current_time
+                )
 
         elif (
             current_time
@@ -5122,7 +5123,7 @@ class SpaceShooterGame:
                 self.state = "playing"
 
             elif event.key == pygame.K_r:
-                self.reset_game()
+                self.state = "mode_select"
 
             elif event.key == pygame.K_m:
                 self.state = "menu"
@@ -5131,7 +5132,7 @@ class SpaceShooterGame:
             self.state = "playing"
 
         elif self.restart_button.clicked(event):
-            self.reset_game()
+            self.state = "mode_select"
 
         elif self.menu_button.clicked(event):
             self.state = "menu"
@@ -5141,7 +5142,7 @@ class SpaceShooterGame:
             return
 
         if event.key == pygame.K_r:
-            self.reset_game()
+            self.state = "mode_select"
 
         elif event.key == pygame.K_l:
             self.open_leaderboard()
@@ -6923,6 +6924,9 @@ class SpaceShooterGame:
 
             elif self.state == "menu":
                 self.draw_menu()
+
+            elif self.state == "mode_select":
+                self.draw_mode_select()
 
             elif self.state in (
                 "playing",

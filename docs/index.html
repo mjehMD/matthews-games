@@ -1,933 +1,719 @@
+Library
+/
+matthews_games_index_with_auth.html
+
+
+
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
-
-    <meta
-        name="description"
-        content="Play Matthew's Python and Pygame games directly in your browser."
-    >
-
-    <title>Matthew's Games</title>
-
-    <style>
-        :root {
-            --background-dark: #030711;
-            --background-mid: #07162f;
-            --panel: rgba(12, 29, 61, 0.94);
-            --panel-light: rgba(20, 48, 95, 0.95);
-
-            --blue: #4ea8ff;
-            --cyan: #7ee7ff;
-            --light-cyan: #c9f7ff;
-
-            --white: #f4f8ff;
-            --grey: #b8c5dc;
-            --dark-grey: #7d8ba7;
-
-            --green: #6ee7a0;
-            --yellow: #ffd76a;
-            --red: #ff6f79;
-
-            --shadow: #01040a;
-        }
-
-        * {
-            box-sizing: border-box;
-        }
-
-        html {
-            scroll-behavior: smooth;
-        }
-
-        body {
-            min-height: 100vh;
-            margin: 0;
-            font-family:
-                Arial,
-                Helvetica,
-                sans-serif;
-            color: var(--white);
-            background:
-                radial-gradient(
-                    circle at 50% -10%,
-                    rgba(41, 117, 220, 0.55),
-                    transparent 38%
-                ),
-                radial-gradient(
-                    circle at 10% 40%,
-                    rgba(80, 70, 180, 0.22),
-                    transparent 30%
-                ),
-                radial-gradient(
-                    circle at 90% 70%,
-                    rgba(30, 155, 180, 0.18),
-                    transparent 30%
-                ),
-                linear-gradient(
-                    180deg,
-                    var(--background-mid),
-                    var(--background-dark) 72%
-                );
-            background-attachment: fixed;
-        }
-
-        body::before {
-            content: "";
-            position: fixed;
-            inset: 0;
-            z-index: -1;
-            pointer-events: none;
-            opacity: 0.45;
-            background-image:
-                radial-gradient(
-                    circle,
-                    rgba(255, 255, 255, 0.9) 0 1px,
-                    transparent 1.5px
-                );
-            background-size: 65px 65px;
-        }
-
-        a {
-            color: inherit;
-        }
-
-        .page-shell {
-            width: min(1180px, calc(100% - 32px));
-            margin: 0 auto;
-        }
-
-        .topbar {
-            position: sticky;
-            top: 0;
-            z-index: 20;
-            border-bottom: 1px solid rgba(126, 231, 255, 0.18);
-            background: rgba(3, 7, 17, 0.82);
-            backdrop-filter: blur(14px);
-        }
-
-        .topbar-content {
-            display: flex;
-            min-height: 70px;
-            align-items: center;
-            justify-content: space-between;
-            gap: 24px;
-        }
-
-        .brand {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            font-size: 1.15rem;
-            font-weight: 800;
-            letter-spacing: 0.04em;
-            text-decoration: none;
-        }
-
-        .brand-icon {
-            display: grid;
-            width: 42px;
-            height: 42px;
-            place-items: center;
-            border: 2px solid var(--cyan);
-            border-radius: 12px;
-            background: rgba(28, 91, 160, 0.35);
-            box-shadow:
-                0 0 18px rgba(78, 168, 255, 0.25),
-                inset 0 0 16px rgba(126, 231, 255, 0.12);
-            font-size: 1.35rem;
-        }
-
-        .nav-links {
-            display: flex;
-            align-items: center;
-            gap: 18px;
-        }
-
-        .nav-links a {
-            color: var(--grey);
-            font-size: 0.95rem;
-            font-weight: 700;
-            text-decoration: none;
-            transition:
-                color 0.15s ease,
-                transform 0.15s ease;
-        }
-
-        .nav-links a:hover {
-            color: var(--cyan);
-            transform: translateY(-1px);
-        }
-
-        .hero {
-            display: grid;
-            grid-template-columns: 1.15fr 0.85fr;
-            min-height: 520px;
-            align-items: center;
-            gap: 46px;
-            padding: 80px 0 60px;
-        }
-
-        .eyebrow {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 18px;
-            padding: 8px 13px;
-            border: 1px solid rgba(126, 231, 255, 0.42);
-            border-radius: 999px;
-            color: var(--cyan);
-            background: rgba(19, 57, 104, 0.48);
-            font-size: 0.82rem;
-            font-weight: 800;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-        }
-
-        .hero h1 {
-            max-width: 720px;
-            margin: 0;
-            font-size: clamp(3.2rem, 7vw, 6.8rem);
-            line-height: 0.94;
-            letter-spacing: -0.055em;
-        }
-
-        .hero h1 span {
-            color: var(--cyan);
-            text-shadow:
-                0 0 18px rgba(126, 231, 255, 0.45),
-                0 0 46px rgba(78, 168, 255, 0.2);
-        }
-
-        .hero-description {
-            max-width: 640px;
-            margin: 25px 0 0;
-            color: var(--grey);
-            font-size: clamp(1rem, 2vw, 1.22rem);
-            line-height: 1.7;
-        }
-
-        .hero-actions {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 14px;
-            margin-top: 32px;
-        }
-
-        .primary-button,
-        .secondary-button {
-            display: inline-flex;
-            min-height: 52px;
-            align-items: center;
-            justify-content: center;
-            gap: 9px;
-            padding: 0 22px;
-            border-radius: 12px;
-            font-weight: 800;
-            text-decoration: none;
-            transition:
-                transform 0.15s ease,
-                box-shadow 0.15s ease,
-                background 0.15s ease;
-        }
-
-        .primary-button {
-            border: 2px solid var(--light-cyan);
-            color: #03111f;
-            background:
-                linear-gradient(
-                    180deg,
-                    #a9f1ff,
-                    #61c9ff
-                );
-            box-shadow:
-                0 7px 0 #14518a,
-                0 0 24px rgba(78, 168, 255, 0.3);
-        }
-
-        .primary-button:hover {
-            transform: translateY(2px);
-            box-shadow:
-                0 5px 0 #14518a,
-                0 0 30px rgba(78, 168, 255, 0.42);
-        }
-
-        .secondary-button {
-            border: 2px solid rgba(126, 231, 255, 0.48);
-            color: var(--white);
-            background: rgba(15, 43, 83, 0.72);
-            box-shadow: 0 7px 0 #020710;
-        }
-
-        .secondary-button:hover {
-            transform: translateY(2px);
-            background: rgba(24, 68, 125, 0.9);
-            box-shadow: 0 5px 0 #020710;
-        }
-
-        .hero-art {
-            position: relative;
-            display: grid;
-            min-height: 390px;
-            place-items: center;
-        }
-
-        .orbit {
-            position: absolute;
-            width: 340px;
-            height: 340px;
-            border: 1px solid rgba(126, 231, 255, 0.22);
-            border-radius: 50%;
-            animation: spin 18s linear infinite;
-        }
-
-        .orbit::before,
-        .orbit::after {
-            content: "";
-            position: absolute;
-            border-radius: 50%;
-            background: var(--cyan);
-            box-shadow: 0 0 18px rgba(126, 231, 255, 0.85);
-        }
-
-        .orbit::before {
-            top: 20px;
-            left: 48px;
-            width: 9px;
-            height: 9px;
-        }
-
-        .orbit::after {
-            right: 22px;
-            bottom: 65px;
-            width: 13px;
-            height: 13px;
-        }
-
-        .controller-card {
-            position: relative;
-            display: grid;
-            width: 290px;
-            min-height: 240px;
-            place-items: center;
-            border: 2px solid rgba(126, 231, 255, 0.5);
-            border-radius: 34px;
-            background:
-                linear-gradient(
-                    145deg,
-                    rgba(28, 74, 135, 0.92),
-                    rgba(8, 22, 52, 0.98)
-                );
-            box-shadow:
-                0 18px 0 rgba(1, 4, 10, 0.95),
-                0 0 55px rgba(78, 168, 255, 0.23),
-                inset 0 0 35px rgba(126, 231, 255, 0.06);
-            transform: rotate(-4deg);
-        }
-
-        .controller-card::before {
-            content: "🎮";
-            font-size: 7.5rem;
-            filter: drop-shadow(0 0 22px rgba(126, 231, 255, 0.35));
-        }
-
-        .controller-label {
-            position: absolute;
-            right: 18px;
-            bottom: 15px;
-            padding: 7px 11px;
-            border: 1px solid rgba(126, 231, 255, 0.35);
-            border-radius: 999px;
-            color: var(--cyan);
-            background: rgba(4, 12, 30, 0.75);
-            font-size: 0.74rem;
-            font-weight: 800;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-        }
-
-        @keyframes spin {
-            to {
-                transform: rotate(360deg);
-            }
-        }
-
-        .section {
-            padding: 72px 0;
-        }
-
-        .section-heading {
-            display: flex;
-            align-items: end;
-            justify-content: space-between;
-            gap: 25px;
-            margin-bottom: 30px;
-        }
-
-        .section-heading h2 {
-            margin: 0;
-            font-size: clamp(2rem, 4vw, 3.3rem);
-            letter-spacing: -0.035em;
-        }
-
-        .section-heading p {
-            max-width: 500px;
-            margin: 0;
-            color: var(--grey);
-            line-height: 1.6;
-        }
-
-        .game-grid {
-            display: grid;
-            grid-template-columns:
-                repeat(2, minmax(0, 1fr));
-            gap: 28px;
-        }
-
-        .game-card {
-            position: relative;
-            overflow: hidden;
-            display: flex;
-            min-height: 470px;
-            flex-direction: column;
-            border: 2px solid rgba(126, 231, 255, 0.34);
-            border-radius: 24px;
-            background:
-                linear-gradient(
-                    155deg,
-                    rgba(24, 62, 118, 0.95),
-                    rgba(7, 19, 47, 0.98)
-                );
-            box-shadow:
-                0 14px 0 var(--shadow),
-                0 0 28px rgba(78, 168, 255, 0.12);
-            transition:
-                transform 0.2s ease,
-                border-color 0.2s ease,
-                box-shadow 0.2s ease;
-        }
-
-        .game-card:hover {
-            transform: translateY(-6px);
-            border-color: var(--cyan);
-            box-shadow:
-                0 18px 0 var(--shadow),
-                0 0 40px rgba(78, 168, 255, 0.24);
-        }
-
-        .game-preview {
-            position: relative;
-            display: grid;
-            min-height: 220px;
-            place-items: center;
-            overflow: hidden;
-            border-bottom: 1px solid rgba(126, 231, 255, 0.18);
-        }
-
-        .space-preview {
-            background:
-                radial-gradient(
-                    circle at 50% 35%,
-                    rgba(73, 122, 255, 0.42),
-                    transparent 22%
-                ),
-                radial-gradient(
-                    circle at 20% 30%,
-                    rgba(168, 76, 215, 0.25),
-                    transparent 28%
-                ),
-                linear-gradient(
-                    180deg,
-                    #07132f,
-                    #02050d
-                );
-        }
-
-        .frontline-preview {
-            background:
-                linear-gradient(
-                    25deg,
-                    rgba(56, 90, 51, 0.9) 25%,
-                    transparent 25%
-                ),
-                linear-gradient(
-                    -25deg,
-                    rgba(82, 112, 67, 0.85) 25%,
-                    transparent 25%
-                ),
-                linear-gradient(
-                    135deg,
-                    #7d704d 40%,
-                    #485f3e 40%
-                );
-            background-size:
-                90px 90px,
-                90px 90px,
-                auto;
-        }
-
-        .preview-icon {
-            position: relative;
-            z-index: 2;
-            font-size: 6.5rem;
-            filter: drop-shadow(0 12px 14px rgba(0, 0, 0, 0.45));
-            transition: transform 0.25s ease;
-        }
-
-        .game-card:hover .preview-icon {
-            transform: scale(1.08) rotate(-2deg);
-        }
-
-        .preview-badge {
-            position: absolute;
-            top: 16px;
-            left: 16px;
-            z-index: 3;
-            padding: 7px 11px;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-            border-radius: 999px;
-            background: rgba(2, 8, 19, 0.74);
-            color: var(--light-cyan);
-            font-size: 0.75rem;
-            font-weight: 800;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-        }
-
-        .game-content {
-            display: flex;
-            flex: 1;
-            flex-direction: column;
-            padding: 25px;
-        }
-
-        .game-title-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 15px;
-        }
-
-        .game-title-row h3 {
-            margin: 0;
-            font-size: 1.75rem;
-        }
-
-        .status {
-            padding: 6px 9px;
-            border: 1px solid rgba(110, 231, 160, 0.35);
-            border-radius: 999px;
-            color: var(--green);
-            background: rgba(36, 114, 78, 0.18);
-            font-size: 0.72rem;
-            font-weight: 800;
-            text-transform: uppercase;
-        }
-
-        .game-description {
-            margin: 15px 0 20px;
-            color: var(--grey);
-            line-height: 1.65;
-        }
-
-        .feature-list {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin-bottom: 25px;
-        }
-
-        .feature-list span {
-            padding: 7px 10px;
-            border: 1px solid rgba(126, 231, 255, 0.18);
-            border-radius: 8px;
-            color: var(--light-cyan);
-            background: rgba(23, 60, 108, 0.4);
-            font-size: 0.8rem;
-            font-weight: 700;
-        }
-
-        .game-actions {
-            display: flex;
-            gap: 12px;
-            margin-top: auto;
-        }
-
-        .play-game-button {
-            display: inline-flex;
-            min-height: 50px;
-            flex: 1;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            border: 2px solid var(--light-cyan);
-            border-radius: 11px;
-            color: #03111f;
-            background:
-                linear-gradient(
-                    180deg,
-                    #9bedff,
-                    #53bdff
-                );
-            box-shadow: 0 6px 0 #124f86;
-            font-weight: 900;
-            text-decoration: none;
-            transition:
-                transform 0.15s ease,
-                box-shadow 0.15s ease;
-        }
-
-        .play-game-button:hover {
-            transform: translateY(2px);
-            box-shadow: 0 4px 0 #124f86;
-        }
-
-        .about-grid {
-            display: grid;
-            grid-template-columns:
-                repeat(3, minmax(0, 1fr));
-            gap: 20px;
-        }
-
-        .info-card {
-            padding: 24px;
-            border: 1px solid rgba(126, 231, 255, 0.22);
-            border-radius: 18px;
-            background: rgba(10, 27, 59, 0.72);
-            box-shadow: inset 0 0 24px rgba(126, 231, 255, 0.035);
-        }
-
-        .info-card-icon {
-            margin-bottom: 15px;
-            font-size: 2rem;
-        }
-
-        .info-card h3 {
-            margin: 0 0 10px;
-        }
-
-        .info-card p {
-            margin: 0;
-            color: var(--grey);
-            line-height: 1.6;
-        }
-
-        footer {
-            padding: 38px 0 48px;
-            border-top: 1px solid rgba(126, 231, 255, 0.14);
-            color: var(--dark-grey);
-            text-align: center;
-        }
-
-        footer strong {
-            color: var(--cyan);
-        }
-
-        @media (max-width: 900px) {
-            .hero {
-                grid-template-columns: 1fr;
-                padding-top: 58px;
-                text-align: center;
-            }
-
-            .hero-description {
-                margin-right: auto;
-                margin-left: auto;
-            }
-
-            .hero-actions {
-                justify-content: center;
-            }
-
-            .hero-art {
-                min-height: 340px;
-            }
-
-            .section-heading {
-                align-items: start;
-                flex-direction: column;
-            }
-
-            .game-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .about-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        @media (max-width: 650px) {
-            .page-shell {
-                width: min(100% - 20px, 1180px);
-            }
-
-            .topbar-content {
-                min-height: 62px;
-            }
-
-            .nav-links {
-                display: none;
-            }
-
-            .hero {
-                min-height: auto;
-                padding: 55px 0 35px;
-            }
-
-            .hero h1 {
-                font-size: clamp(3rem, 17vw, 4.4rem);
-            }
-
-            .hero-art {
-                min-height: 300px;
-            }
-
-            .orbit {
-                width: 270px;
-                height: 270px;
-            }
-
-            .controller-card {
-                width: 235px;
-                min-height: 195px;
-            }
-
-            .controller-card::before {
-                font-size: 5.8rem;
-            }
-
-            .section {
-                padding: 55px 0;
-            }
-
-            .game-actions {
-                flex-direction: column;
-            }
-
-            .game-preview {
-                min-height: 190px;
-            }
-
-            .preview-icon {
-                font-size: 5.4rem;
-            }
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Play Matthew's Python and Pygame games in your browser.">
+  <title>Matthew's Games</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <style>
+    :root {
+      --bg:#030711;
+      --panel:#0d1d3d;
+      --panel2:#15315f;
+      --cyan:#7ee7ff;
+      --blue:#4ea8ff;
+      --white:#f5f8ff;
+      --grey:#b8c5dc;
+      --green:#6ee7a0;
+      --yellow:#ffd76a;
+      --red:#ff6f79;
+    }
+
+    * { box-sizing:border-box; }
+
+    body {
+      margin:0;
+      min-height:100vh;
+      font-family:Arial, Helvetica, sans-serif;
+      color:var(--white);
+      background:
+        radial-gradient(circle at top, rgba(55,120,230,.45), transparent 35%),
+        linear-gradient(180deg, #081831, var(--bg) 75%);
+    }
+
+    body.modal-open { overflow:hidden; }
+
+    .shell {
+      width:min(1120px, calc(100% - 30px));
+      margin:auto;
+    }
+
+    header {
+      position:sticky;
+      top:0;
+      z-index:20;
+      background:rgba(3,7,17,.9);
+      border-bottom:1px solid rgba(126,231,255,.2);
+      backdrop-filter:blur(12px);
+    }
+
+    .topbar {
+      min-height:70px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:20px;
+    }
+
+    .brand {
+      color:var(--white);
+      text-decoration:none;
+      font-weight:900;
+      font-size:1.2rem;
+    }
+
+    .account-area {
+      display:flex;
+      align-items:center;
+      gap:8px;
+    }
+
+    button, .play-button {
+      min-height:42px;
+      padding:0 16px;
+      border:1px solid rgba(126,231,255,.5);
+      border-radius:10px;
+      color:var(--white);
+      background:var(--panel2);
+      font:inherit;
+      font-weight:800;
+      cursor:pointer;
+    }
+
+    button.primary, .play-button {
+      color:#03111f;
+      background:linear-gradient(#b8f5ff, #60c8ff);
+      border:2px solid #d4fbff;
+    }
+
+    .user-chip {
+      display:none;
+      padding:10px 14px;
+      border:1px solid rgba(110,231,160,.45);
+      border-radius:999px;
+      color:var(--green);
+      background:rgba(40,110,80,.2);
+      font-weight:900;
+    }
+
+    .hero {
+      padding:90px 0 65px;
+      text-align:center;
+    }
+
+    .hero h1 {
+      margin:0;
+      font-size:clamp(3rem, 9vw, 6.5rem);
+      line-height:.95;
+    }
+
+    .hero h1 span { color:var(--cyan); }
+
+    .hero p {
+      max-width:700px;
+      margin:24px auto 0;
+      color:var(--grey);
+      font-size:1.15rem;
+      line-height:1.7;
+    }
+
+    .hero-actions {
+      display:flex;
+      justify-content:center;
+      gap:12px;
+      flex-wrap:wrap;
+      margin-top:28px;
+    }
+
+    section { padding:55px 0; }
+
+    h2 {
+      margin:0 0 26px;
+      font-size:clamp(2rem, 5vw, 3.2rem);
+    }
+
+    .game-grid {
+      display:grid;
+      grid-template-columns:repeat(2, minmax(0, 1fr));
+      gap:26px;
+    }
+
+    .game-card {
+      overflow:hidden;
+      border:2px solid rgba(126,231,255,.3);
+      border-radius:22px;
+      background:linear-gradient(150deg, rgba(24,62,118,.96), rgba(7,19,47,.98));
+      box-shadow:0 12px 0 #01040a;
+    }
+
+    .preview {
+      min-height:220px;
+      display:grid;
+      place-items:center;
+      font-size:6rem;
+      border-bottom:1px solid rgba(126,231,255,.2);
+    }
+
+    .space { background:radial-gradient(circle, #294d9c, #060d20 60%); }
+    .frontline { background:linear-gradient(135deg, #7e714c 45%, #49603f 45%); }
+
+    .game-content { padding:24px; }
+
+    .game-content h3 {
+      margin:0;
+      font-size:1.8rem;
+    }
+
+    .game-content p {
+      color:var(--grey);
+      line-height:1.65;
+      min-height:80px;
+    }
+
+    .play-button {
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      text-decoration:none;
+    }
+
+    .login-note {
+      display:none;
+      margin:12px 0 0;
+      color:var(--yellow);
+      text-align:center;
+      font-size:.9rem;
+    }
+
+    footer {
+      margin-top:50px;
+      padding:35px 0 45px;
+      border-top:1px solid rgba(126,231,255,.16);
+      color:var(--grey);
+      text-align:center;
+    }
+
+    .modal-backdrop {
+      position:fixed;
+      inset:0;
+      z-index:100;
+      display:none;
+      place-items:center;
+      padding:18px;
+      background:rgba(0,0,0,.78);
+      backdrop-filter:blur(8px);
+    }
+
+    .modal-backdrop.open { display:grid; }
+
+    .auth-card {
+      width:min(460px, 100%);
+      border:2px solid rgba(126,231,255,.55);
+      border-radius:20px;
+      background:linear-gradient(155deg, #163b73, #071128);
+      box-shadow:0 15px 0 #01040a;
+      overflow:hidden;
+    }
+
+    .auth-header {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding:22px 24px 12px;
+    }
+
+    .auth-header h2 { margin:0; }
+
+    .close {
+      width:40px;
+      padding:0;
+      font-size:1.2rem;
+    }
+
+    .tabs {
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:8px;
+      padding:0 24px;
+    }
+
+    .tab.active {
+      color:#03111f;
+      background:var(--cyan);
+    }
+
+    form {
+      display:grid;
+      gap:15px;
+      padding:22px 24px 26px;
+    }
+
+    label {
+      color:var(--cyan);
+      font-size:.9rem;
+      font-weight:800;
+    }
+
+    .field {
+      display:grid;
+      gap:7px;
+    }
+
+    input {
+      min-height:48px;
+      width:100%;
+      padding:0 13px;
+      border:1px solid rgba(126,231,255,.35);
+      border-radius:10px;
+      color:var(--white);
+      background:#040c1d;
+      font:inherit;
+    }
+
+    .message {
+      min-height:22px;
+      margin:0;
+      color:var(--grey);
+      text-align:center;
+      line-height:1.4;
+    }
+
+    .message.error { color:var(--red); }
+    .message.success { color:var(--green); }
+
+    @media (max-width:760px) {
+      .game-grid { grid-template-columns:1fr; }
+      .brand span { display:none; }
+      .account-area button { padding:0 10px; }
+    }
+  </style>
 </head>
 
 <body>
-    <header class="topbar">
-        <div class="page-shell topbar-content">
-            <a class="brand" href="#top">
-                <span class="brand-icon">🎮</span>
-                <span>Matthew's Games</span>
+  <header>
+    <div class="shell topbar">
+      <a class="brand" href="#">
+        🎮 <span>Matthew's Games</span>
+      </a>
+
+      <div class="account-area">
+        <div class="user-chip" id="userChip">
+          👤 <span id="usernameDisplay">Player</span>
+        </div>
+
+        <button id="signInButton" type="button">Sign In</button>
+        <button id="signUpButton" class="primary" type="button">Sign Up</button>
+        <button id="signOutButton" type="button" hidden>Sign Out</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="shell hero">
+      <h1>Play. Compete. <span>Win.</span></h1>
+
+      <p>
+        Create one Matthew's Games account, play every game,
+        and compete on shared online leaderboards.
+      </p>
+
+      <div class="hero-actions">
+        <button class="primary" id="heroSignUpButton" type="button">
+          Create Player Account
+        </button>
+
+        <button type="button" onclick="document.getElementById('games').scrollIntoView()">
+          Browse Games
+        </button>
+      </div>
+    </section>
+
+    <section class="shell" id="games">
+      <h2>Choose your challenge</h2>
+
+      <div class="game-grid">
+        <article class="game-card">
+          <div class="preview space">🚀</div>
+
+          <div class="game-content">
+            <h3>Space Shooter</h3>
+
+            <p>
+              Fight enemy ships, collect power-ups, defeat bosses,
+              and compete for the highest score.
+            </p>
+
+            <a
+              class="play-button protected-game-link"
+              href="games/space-shooter/"
+            >
+              ▶ Play Space Shooter
             </a>
 
-            <nav class="nav-links" aria-label="Main navigation">
-                <a href="#games">Games</a>
-                <a href="#about">About</a>
-            </nav>
+            <div class="login-note">Sign in to play this game.</div>
+          </div>
+        </article>
+
+        <article class="game-card">
+          <div class="preview frontline">🛡️</div>
+
+          <div class="game-content">
+            <h3>Frontline Command</h3>
+
+            <p>
+              Build defences, deploy tanks and helicopters,
+              upgrade units, and survive enemy waves.
+            </p>
+
+            <a
+              class="play-button protected-game-link"
+              href="games/frontline-command/"
+            >
+              ▶ Play Frontline Command
+            </a>
+
+            <div class="login-note">Sign in to play this game.</div>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell">
+      Created by Matthew using Python, Pygame, Pygbag, Supabase, and GitHub Pages.
+    </div>
+  </footer>
+
+  <div class="modal-backdrop" id="authModal">
+    <section class="auth-card" role="dialog" aria-modal="true">
+      <div class="auth-header">
+        <h2 id="authTitle">Sign In</h2>
+
+        <button class="close" id="closeAuthButton" type="button">✕</button>
+      </div>
+
+      <div class="tabs">
+        <button class="tab active" id="signInTab" type="button">Sign In</button>
+        <button class="tab" id="signUpTab" type="button">Create Account</button>
+      </div>
+
+      <form id="authForm">
+        <div class="field" id="usernameField" hidden>
+          <label for="usernameInput">Gaming username</label>
+          <input
+            id="usernameInput"
+            type="text"
+            minlength="3"
+            maxlength="16"
+            autocomplete="username"
+            placeholder="3 to 16 characters"
+          >
         </div>
-    </header>
 
-    <main id="top">
-        <section class="page-shell hero">
-            <div>
-                <div class="eyebrow">
-                    Python-powered browser games
-                </div>
-
-                <h1>
-                    Play.
-                    Compete.
-                    <span>Win.</span>
-                </h1>
-
-                <p class="hero-description">
-                    Welcome to my game collection. Every game was
-                    created with Python and Pygame, then converted so
-                    you can play directly in your browser.
-                </p>
-
-                <div class="hero-actions">
-                    <a class="primary-button" href="#games">
-                        ▶ Browse Games
-                    </a>
-
-                    <a class="secondary-button" href="#about">
-                        Learn More
-                    </a>
-                </div>
-            </div>
-
-            <div class="hero-art" aria-hidden="true">
-                <div class="orbit"></div>
-
-                <div class="controller-card">
-                    <span class="controller-label">
-                        Ready to play
-                    </span>
-                </div>
-            </div>
-        </section>
-
-        <section class="section" id="games">
-            <div class="page-shell">
-                <div class="section-heading">
-                    <div>
-                        <div class="eyebrow">Game library</div>
-                        <h2>Choose your challenge</h2>
-                    </div>
-
-                    <p>
-                        Each game has its own controls, scoring system,
-                        levels, and leaderboard.
-                    </p>
-                </div>
-
-                <div class="game-grid">
-                    <article class="game-card">
-                        <div class="game-preview space-preview">
-                            <span class="preview-badge">
-                                Arcade shooter
-                            </span>
-
-                            <div class="preview-icon">🚀</div>
-                        </div>
-
-                        <div class="game-content">
-                            <div class="game-title-row">
-                                <h3>Space Shooter</h3>
-                                <span class="status">Playable</span>
-                            </div>
-
-                            <p class="game-description">
-                                Pilot your spacecraft through waves of
-                                enemies, collect powerful upgrades, defeat
-                                massive bosses, and build the highest score.
-                            </p>
-
-                            <div class="feature-list">
-                                <span>Boss fights</span>
-                                <span>Power-ups</span>
-                                <span>Score streaks</span>
-                                <span>3 lives</span>
-                            </div>
-
-                            <div class="game-actions">
-                                <a
-                                    class="play-game-button"
-                                    href="games/space-shooter/"
-                                >
-                                    ▶ Play Space Shooter
-                                </a>
-                            </div>
-                        </div>
-                    </article>
-
-                    <article class="game-card">
-                        <div class="game-preview frontline-preview">
-                            <span class="preview-badge">
-                                Tower defence
-                            </span>
-
-                            <div class="preview-icon">🛡️</div>
-                        </div>
-
-                        <div class="game-content">
-                            <div class="game-title-row">
-                                <h3>Frontline Command</h3>
-                                <span class="status">Playable</span>
-                            </div>
-
-                            <p class="game-description">
-                                Build military defences, deploy tanks and
-                                helicopters, generate income, upgrade your
-                                units, and survive increasingly difficult
-                                enemy waves.
-                            </p>
-
-                            <div class="feature-list">
-                                <span>Military units</span>
-                                <span>Upgrades</span>
-                                <span>Boss waves</span>
-                                <span>3 difficulties</span>
-                            </div>
-
-                            <div class="game-actions">
-                                <a
-                                    class="play-game-button"
-                                    href="games/frontline-command/"
-                                >
-                                    ▶ Play Frontline Command
-                                </a>
-                            </div>
-                        </div>
-                    </article>
-                </div>
-            </div>
-        </section>
-
-        <section class="section" id="about">
-            <div class="page-shell">
-                <div class="section-heading">
-                    <div>
-                        <div class="eyebrow">Behind the games</div>
-                        <h2>Built with code</h2>
-                    </div>
-
-                    <p>
-                        This website and every game will keep growing as
-                        new features, games, and online competitions are
-                        added.
-                    </p>
-                </div>
-
-                <div class="about-grid">
-                    <article class="info-card">
-                        <div class="info-card-icon">🐍</div>
-                        <h3>Made with Python</h3>
-                        <p>
-                            The game logic, controls, scoring, enemies,
-                            levels, and visual effects are programmed in
-                            Python.
-                        </p>
-                    </article>
-
-                    <article class="info-card">
-                        <div class="info-card-icon">🕹️</div>
-                        <h3>Powered by Pygame</h3>
-                        <p>
-                            Pygame handles the graphics, movement,
-                            animations, collisions, and input for every
-                            game.
-                        </p>
-                    </article>
-
-                    <article class="info-card">
-                        <div class="info-card-icon">🌐</div>
-                        <h3>Playable Online</h3>
-                        <p>
-                            Pygbag converts the games for browsers, while
-                            GitHub Pages publishes the full game website.
-                        </p>
-                    </article>
-                </div>
-            </div>
-        </section>
-    </main>
-
-    <footer>
-        <div class="page-shell">
-            Created by <strong>Matthew</strong> using Python,
-            Pygame, Pygbag, and GitHub Pages.
+        <div class="field">
+          <label for="emailInput">Email</label>
+          <input
+            id="emailInput"
+            type="email"
+            autocomplete="email"
+            required
+            placeholder="player@example.com"
+          >
         </div>
-    </footer>
+
+        <div class="field">
+          <label for="passwordInput">Password</label>
+          <input
+            id="passwordInput"
+            type="password"
+            minlength="6"
+            autocomplete="current-password"
+            required
+            placeholder="At least 6 characters"
+          >
+        </div>
+
+        <button class="primary" id="authSubmitButton" type="submit">
+          Sign In
+        </button>
+
+        <p class="message" id="authMessage"></p>
+      </form>
+    </section>
+  </div>
+
+  <script>
+    "use strict";
+
+    const SUPABASE_URL =
+      "https://bcarxudxfmsibvnteoaj.supabase.co";
+
+    const SUPABASE_PUBLISHABLE_KEY =
+      "sb_publishable_S7ki2S3tODs4shwWovSY6w_-2jknXXg";
+
+    const client = window.supabase.createClient(
+      SUPABASE_URL,
+      SUPABASE_PUBLISHABLE_KEY,
+      {
+        auth: {
+          persistSession: true,
+          autoRefreshToken: true,
+          detectSessionInUrl: true
+        }
+      }
+    );
+
+    const authModal = document.getElementById("authModal");
+    const authTitle = document.getElementById("authTitle");
+    const authForm = document.getElementById("authForm");
+    const authMessage = document.getElementById("authMessage");
+    const usernameField = document.getElementById("usernameField");
+    const usernameInput = document.getElementById("usernameInput");
+    const emailInput = document.getElementById("emailInput");
+    const passwordInput = document.getElementById("passwordInput");
+    const authSubmitButton = document.getElementById("authSubmitButton");
+
+    const signInTab = document.getElementById("signInTab");
+    const signUpTab = document.getElementById("signUpTab");
+    const signInButton = document.getElementById("signInButton");
+    const signUpButton = document.getElementById("signUpButton");
+    const signOutButton = document.getElementById("signOutButton");
+    const heroSignUpButton = document.getElementById("heroSignUpButton");
+    const closeAuthButton = document.getElementById("closeAuthButton");
+    const userChip = document.getElementById("userChip");
+    const usernameDisplay = document.getElementById("usernameDisplay");
+    const protectedLinks = document.querySelectorAll(".protected-game-link");
+
+    let mode = "signin";
+    let currentSession = null;
+
+    function showMessage(text, kind = "") {
+      authMessage.textContent = text;
+      authMessage.className = "message";
+
+      if (kind) {
+        authMessage.classList.add(kind);
+      }
+    }
+
+    function switchMode(nextMode) {
+      mode = nextMode;
+      const signingUp = mode === "signup";
+
+      signInTab.classList.toggle("active", !signingUp);
+      signUpTab.classList.toggle("active", signingUp);
+
+      usernameField.hidden = !signingUp;
+      usernameInput.required = signingUp;
+
+      authTitle.textContent = signingUp
+        ? "Create Player Account"
+        : "Sign In";
+
+      authSubmitButton.textContent = signingUp
+        ? "Create Account"
+        : "Sign In";
+
+      passwordInput.autocomplete = signingUp
+        ? "new-password"
+        : "current-password";
+
+      showMessage("");
+    }
+
+    function openModal(nextMode) {
+      switchMode(nextMode);
+      authModal.classList.add("open");
+      document.body.classList.add("modal-open");
+    }
+
+    function closeModal() {
+      authModal.classList.remove("open");
+      document.body.classList.remove("modal-open");
+      showMessage("");
+    }
+
+    async function getProfile(userId) {
+      const { data, error } = await client
+        .from("profiles")
+        .select("username")
+        .eq("id", userId)
+        .single();
+
+      if (error) {
+        console.error(error);
+        return null;
+      }
+
+      return data;
+    }
+
+    async function updateAccountUI(session) {
+      currentSession = session;
+      const signedIn = Boolean(session?.user);
+
+      signInButton.hidden = signedIn;
+      signUpButton.hidden = signedIn;
+      signOutButton.hidden = !signedIn;
+      heroSignUpButton.hidden = signedIn;
+      userChip.style.display = signedIn ? "block" : "none";
+
+      document.querySelectorAll(".login-note").forEach((note) => {
+        note.style.display = signedIn ? "none" : "block";
+      });
+
+      if (signedIn) {
+        const profile = await getProfile(session.user.id);
+
+        usernameDisplay.textContent =
+          profile?.username
+          || session.user.user_metadata?.username
+          || "Player";
+      }
+    }
+
+    async function signUp() {
+      const username = usernameInput.value.trim();
+      const email = emailInput.value.trim();
+      const password = passwordInput.value;
+
+      if (username.length < 3 || username.length > 16) {
+        showMessage("Username must be 3 to 16 characters.", "error");
+        return;
+      }
+
+      const { data, error } = await client.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { username }
+        }
+      });
+
+      if (error) {
+        showMessage(error.message, "error");
+        return;
+      }
+
+      if (data.session) {
+        await updateAccountUI(data.session);
+        showMessage("Account created. You are signed in!", "success");
+
+        setTimeout(closeModal, 700);
+      } else {
+        showMessage(
+          "Account created. Check your email if confirmation is enabled.",
+          "success"
+        );
+      }
+    }
+
+    async function signIn() {
+      const email = emailInput.value.trim();
+      const password = passwordInput.value;
+
+      const { data, error } = await client.auth.signInWithPassword({
+        email,
+        password
+      });
+
+      if (error) {
+        showMessage(error.message, "error");
+        return;
+      }
+
+      await updateAccountUI(data.session);
+      showMessage("Signed in successfully.", "success");
+
+      setTimeout(closeModal, 600);
+    }
+
+    authForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      authSubmitButton.disabled = true;
+
+      showMessage(
+        mode === "signup"
+          ? "Creating account..."
+          : "Signing in..."
+      );
+
+      try {
+        if (mode === "signup") {
+          await signUp();
+        } else {
+          await signIn();
+        }
+      } catch (error) {
+        console.error(error);
+        showMessage("Something went wrong. Please try again.", "error");
+      } finally {
+        authSubmitButton.disabled = false;
+      }
+    });
+
+    signInTab.addEventListener("click", () => switchMode("signin"));
+    signUpTab.addEventListener("click", () => switchMode("signup"));
+    signInButton.addEventListener("click", () => openModal("signin"));
+    signUpButton.addEventListener("click", () => openModal("signup"));
+    heroSignUpButton.addEventListener("click", () => openModal("signup"));
+    closeAuthButton.addEventListener("click", closeModal);
+
+    authModal.addEventListener("click", (event) => {
+      if (event.target === authModal) {
+        closeModal();
+      }
+    });
+
+    signOutButton.addEventListener("click", async () => {
+      const { error } = await client.auth.signOut();
+
+      if (error) {
+        alert("Could not sign out: " + error.message);
+        return;
+      }
+
+      await updateAccountUI(null);
+    });
+
+    protectedLinks.forEach((link) => {
+      link.addEventListener("click", (event) => {
+        if (currentSession?.user) {
+          return;
+        }
+
+        event.preventDefault();
+        openModal("signin");
+        showMessage("Sign in before launching a game.", "error");
+      });
+    });
+
+    client.auth.onAuthStateChange(async (_event, session) => {
+      await updateAccountUI(session);
+    });
+
+    async function initialize() {
+      const { data, error } = await client.auth.getSession();
+
+      if (error) {
+        console.error(error);
+      }
+
+      await updateAccountUI(data?.session || null);
+    }
+
+    initialize();
+  </script>
 </body>
 </html>

@@ -3,50 +3,53 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Play Space Shooter, Frontline Command, Orbit Rush, and more Matthew's Games in your browser.">
+  <meta name="description" content="Play Matthew's browser games, sign in, and compete on online leaderboards.">
   <title>Matthew's Games</title>
-
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-
   <style>
     :root {
-      --bg:#030711;
-      --panel:#0d1d3d;
-      --panel2:#15315f;
-      --cyan:#7ee7ff;
-      --blue:#4ea8ff;
-      --white:#f5f8ff;
-      --grey:#b8c5dc;
-      --green:#6ee7a0;
-      --yellow:#ffd76a;
-      --red:#ff6f79;
+      --background:#030711;
+      --surface:#0b1730;
+      --surface-light:#132b54;
+      --cyan:#78e5ff;
+      --blue:#50aaff;
+      --white:#f4f8ff;
+      --grey:#b5c3db;
+      --green:#6de5a0;
+      --yellow:#ffd76c;
+      --red:#ff707d;
+      --shadow:#010308;
     }
 
     * { box-sizing:border-box; }
 
+    html { scroll-behavior:smooth; }
+
     body {
       margin:0;
       min-height:100vh;
-      font-family:Arial, Helvetica, sans-serif;
       color:var(--white);
       background:
-        radial-gradient(circle at top, rgba(55,120,230,.45), transparent 35%),
-        linear-gradient(180deg, #081831, var(--bg) 75%);
+        radial-gradient(circle at 50% 0%, rgba(55,125,240,.40), transparent 34rem),
+        linear-gradient(180deg, #081731 0%, var(--background) 72%);
+      font-family:Arial, Helvetica, sans-serif;
     }
 
     body.modal-open { overflow:hidden; }
 
+    button, a { font:inherit; }
+
     .shell {
-      width:min(1120px, calc(100% - 30px));
-      margin:auto;
+      width:min(1140px, calc(100% - 30px));
+      margin:0 auto;
     }
 
     header {
       position:sticky;
       top:0;
-      z-index:20;
-      background:rgba(3,7,17,.9);
-      border-bottom:1px solid rgba(126,231,255,.2);
+      z-index:30;
+      border-bottom:1px solid rgba(120,229,255,.22);
+      background:rgba(3,7,17,.92);
       backdrop-filter:blur(12px);
     }
 
@@ -55,68 +58,74 @@
       display:flex;
       align-items:center;
       justify-content:space-between;
-      gap:20px;
+      gap:18px;
     }
 
     .brand {
       color:var(--white);
       text-decoration:none;
+      font-size:1.25rem;
       font-weight:900;
-      font-size:1.2rem;
     }
 
     .account-area {
       display:flex;
       align-items:center;
-      gap:8px;
-    }
-
-    button, .play-button {
-      min-height:42px;
-      padding:0 16px;
-      border:1px solid rgba(126,231,255,.5);
-      border-radius:10px;
-      color:var(--white);
-      background:var(--panel2);
-      font:inherit;
-      font-weight:800;
-      cursor:pointer;
-    }
-
-    button.primary, .play-button {
-      color:#03111f;
-      background:linear-gradient(#b8f5ff, #60c8ff);
-      border:2px solid #d4fbff;
+      justify-content:flex-end;
+      gap:9px;
+      flex-wrap:wrap;
     }
 
     .user-chip {
       display:none;
       padding:10px 14px;
-      border:1px solid rgba(110,231,160,.45);
+      border:1px solid rgba(109,229,160,.55);
       border-radius:999px;
       color:var(--green);
-      background:rgba(40,110,80,.2);
+      background:rgba(30,100,70,.20);
       font-weight:900;
     }
 
+    button, .play-button {
+      min-height:43px;
+      padding:0 16px;
+      border:1px solid rgba(120,229,255,.52);
+      border-radius:11px;
+      color:var(--white);
+      background:var(--surface-light);
+      font-weight:850;
+      cursor:pointer;
+    }
+
+    button:hover, .play-button:hover {
+      transform:translateY(-1px);
+      filter:brightness(1.08);
+    }
+
+    button.primary, .play-button {
+      color:#03111d;
+      border:2px solid #d5faff;
+      background:linear-gradient(180deg, #c3f7ff, #60c9ff);
+    }
+
     .hero {
-      padding:90px 0 65px;
+      padding:88px 0 58px;
       text-align:center;
     }
 
     .hero h1 {
       margin:0;
-      font-size:clamp(3rem, 9vw, 6.5rem);
+      font-size:clamp(3rem, 9vw, 6.3rem);
       line-height:.95;
     }
 
     .hero h1 span { color:var(--cyan); }
 
     .hero p {
-      max-width:700px;
+      max-width:720px;
       margin:24px auto 0;
       color:var(--grey);
-      font-size:1.15rem;
+      font-size:1.1rem;
       line-height:1.7;
     }
 
@@ -128,88 +137,72 @@
       margin-top:28px;
     }
 
-    section { padding:55px 0; }
+    main section { padding:48px 0; }
 
     h2 {
-      margin:0 0 26px;
-      font-size:clamp(2rem, 5vw, 3.2rem);
+      margin:0 0 25px;
+      font-size:clamp(2rem, 5vw, 3.1rem);
     }
 
     .game-grid {
       display:grid;
       grid-template-columns:repeat(3, minmax(0, 1fr));
-      gap:26px;
+      gap:24px;
     }
 
     .game-card {
+      display:flex;
+      min-width:0;
+      flex-direction:column;
       overflow:hidden;
-      border:2px solid rgba(126,231,255,.3);
+      border:2px solid rgba(120,229,255,.28);
       border-radius:22px;
-      background:linear-gradient(150deg, rgba(24,62,118,.96), rgba(7,19,47,.98));
-      box-shadow:0 12px 0 #01040a;
+      background:linear-gradient(150deg, rgba(24,61,116,.96), rgba(6,17,42,.99));
+      box-shadow:0 11px 0 var(--shadow);
     }
 
     .preview {
-      min-height:220px;
+      min-height:205px;
       display:grid;
       place-items:center;
-      font-size:6rem;
-      border-bottom:1px solid rgba(126,231,255,.2);
+      border-bottom:1px solid rgba(120,229,255,.2);
+      font-size:5.6rem;
     }
 
-    .space { background:radial-gradient(circle, #294d9c, #060d20 60%); }
-    .frontline { background:linear-gradient(135deg, #7e714c 45%, #49603f 45%); }
-    .orbit {
-      position:relative;
-      overflow:hidden;
+    .space-preview {
+      background:radial-gradient(circle, #3158ac, #060d21 62%);
+    }
+
+    .frontline-preview {
+      background:linear-gradient(135deg, #81744e 45%, #475d3e 45%);
+    }
+
+    .orbit-preview {
       background:
-        radial-gradient(
-          ellipse at center 75%,
-          rgba(76, 226, 255, .75) 0 5%,
-          rgba(40, 105, 210, .4) 18%,
-          transparent 42%
-        ),
-        repeating-radial-gradient(
-          ellipse at center 84%,
-          rgba(106, 236, 255, .55) 0 2px,
-          transparent 3px 22px
-        ),
-        linear-gradient(180deg, #070b24, #101e52 56%, #050816);
+        radial-gradient(ellipse at 50% 83%, rgba(76,225,255,.9) 0 4%, transparent 5%),
+        repeating-radial-gradient(ellipse at 50% 88%, rgba(93,220,255,.5) 0 2px, transparent 3px 22px),
+        linear-gradient(180deg, #090c25, #16285e 60%, #050817);
+      color:var(--cyan);
+      text-shadow:0 0 22px rgba(120,229,255,.85);
     }
 
-    .orbit::before {
-      content:"";
-      position:absolute;
-      width:340px;
-      height:420px;
-      left:50%;
-      top:52%;
-      transform:translate(-50%, -18%);
-      border:3px solid rgba(126, 231, 255, .65);
-      border-radius:50%;
-      box-shadow:
-        0 0 25px rgba(78, 168, 255, .5),
-        inset 0 0 28px rgba(78, 168, 255, .22);
+    .game-content {
+      display:flex;
+      flex:1;
+      flex-direction:column;
+      padding:23px;
     }
-
-    .orbit .preview-icon {
-      position:relative;
-      z-index:1;
-      filter:drop-shadow(0 0 18px rgba(126, 231, 255, .8));
-    }
-
-
-    .game-content { padding:24px; }
 
     .game-content h3 {
       margin:0;
-      font-size:1.8rem;
+      font-size:1.7rem;
     }
 
     .game-content p {
+      flex:1;
+      margin:15px 0 22px;
       color:var(--grey);
-      line-height:1.65;
-      min-height:80px;
+      line-height:1.62;
     }
 
     .play-button {
@@ -217,6 +210,7 @@
       align-items:center;
       justify-content:center;
       text-decoration:none;
+      text-align:center;
     }
 
     .login-note {
@@ -228,9 +222,9 @@
     }
 
     footer {
-      margin-top:50px;
-      padding:35px 0 45px;
-      border-top:1px solid rgba(126,231,255,.16);
+      margin-top:48px;
+      padding:34px 0 42px;
+      border-top:1px solid rgba(120,229,255,.16);
       color:var(--grey);
       text-align:center;
     }
@@ -243,18 +237,18 @@
       place-items:center;
       padding:18px;
       background:rgba(0,0,0,.78);
-      backdrop-filter:blur(8px);
+      backdrop-filter:blur(7px);
     }
 
     .modal-backdrop.open { display:grid; }
 
     .auth-card {
       width:min(460px, 100%);
-      border:2px solid rgba(126,231,255,.55);
-      border-radius:20px;
-      background:linear-gradient(155deg, #163b73, #071128);
-      box-shadow:0 15px 0 #01040a;
       overflow:hidden;
+      border:2px solid rgba(120,229,255,.55);
+      border-radius:20px;
+      background:linear-gradient(155deg, #163a70, #071126);
+      box-shadow:0 15px 0 var(--shadow);
     }
 
     .auth-header {
@@ -264,12 +258,13 @@
       padding:22px 24px 12px;
     }
 
-    .auth-header h2 { margin:0; }
+    .auth-header h2 { margin:0; font-size:1.8rem; }
 
-    .close {
-      width:40px;
+    .close-button {
+      width:42px;
+      min-height:42px;
       padding:0;
-      font-size:1.2rem;
+      font-size:1.15rem;
     }
 
     .tabs {
@@ -280,20 +275,14 @@
     }
 
     .tab.active {
-      color:#03111f;
+      color:#03111d;
       background:var(--cyan);
     }
 
     form {
       display:grid;
-      gap:15px;
-      padding:22px 24px 26px;
-    }
-
-    label {
-      color:var(--cyan);
-      font-size:.9rem;
-      font-weight:800;
+      gap:17px;
+      padding:24px;
     }
 
     .field {
@@ -301,14 +290,20 @@
       gap:7px;
     }
 
+    label {
+      color:var(--cyan);
+      font-size:.92rem;
+      font-weight:850;
+    }
+
     input {
-      min-height:48px;
       width:100%;
+      min-height:49px;
       padding:0 13px;
-      border:1px solid rgba(126,231,255,.35);
+      border:1px solid rgba(120,229,255,.36);
       border-radius:10px;
       color:var(--white);
-      background:#040c1d;
+      background:#040c1c;
       font:inherit;
     }
 
@@ -327,20 +322,18 @@
       .game-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); }
     }
 
-    @media (max-width:760px) {
+    @media (max-width:700px) {
       .game-grid { grid-template-columns:1fr; }
       .brand span { display:none; }
-      .account-area button { padding:0 10px; }
+      .hero { padding-top:65px; }
+      .account-area button { padding:0 11px; }
     }
   </style>
 </head>
-
 <body>
   <header>
     <div class="shell topbar">
-      <a class="brand" href="#">
-        🎮 <span>Matthew's Games</span>
-      </a>
+      <a class="brand" href="./">🎮 <span>Matthew's Games</span></a>
 
       <div class="account-area">
         <div class="user-chip" id="userChip">
@@ -357,20 +350,16 @@
   <main>
     <section class="shell hero">
       <h1>Play. Compete. <span>Win.</span></h1>
-
       <p>
-        Create one Matthew's Games account, play every game,
-        and compete on shared online leaderboards.
+        Use one Matthew's Games account to play every game and compete
+        on shared online leaderboards.
       </p>
 
       <div class="hero-actions">
         <button class="primary" id="heroSignUpButton" type="button">
           Create Player Account
         </button>
-
-        <button type="button" onclick="document.getElementById('games').scrollIntoView()">
-          Browse Games
-        </button>
+        <button id="browseGamesButton" type="button">Browse Games</button>
       </div>
     </section>
 
@@ -379,70 +368,46 @@
 
       <div class="game-grid">
         <article class="game-card">
-          <div class="preview space">🚀</div>
-
+          <div class="preview space-preview">🚀</div>
           <div class="game-content">
             <h3>Space Shooter</h3>
-
             <p>
-              Fight enemy ships, collect power-ups, defeat bosses,
-              and compete for the highest score.
+              Fight enemy ships, collect power-ups, defeat bosses, and
+              choose between Easy and limited-ammo Hard Mode.
             </p>
-
-            <a
-              class="play-button protected-game-link"
-              href="games/space-shooter/"
-            >
+            <a class="play-button protected-game-link" href="games/space-shooter/">
               ▶ Play Space Shooter
             </a>
-
             <div class="login-note">Sign in to play this game.</div>
           </div>
         </article>
 
         <article class="game-card">
-          <div class="preview frontline">🛡️</div>
-
+          <div class="preview frontline-preview">🛡️</div>
           <div class="game-content">
             <h3>Frontline Command</h3>
-
             <p>
-              Build defences, deploy tanks and helicopters,
-              upgrade units, and survive enemy waves.
+              Build defences, deploy powerful units, improve your strategy,
+              and survive increasingly difficult enemy and boss waves.
             </p>
-
-            <a
-              class="play-button protected-game-link"
-              href="games/frontline-command/"
-            >
+            <a class="play-button protected-game-link" href="games/frontline-command/">
               ▶ Play Frontline Command
             </a>
-
             <div class="login-note">Sign in to play this game.</div>
           </div>
         </article>
 
         <article class="game-card">
-          <div class="preview orbit">
-            <div class="preview-icon">◈</div>
-          </div>
-
+          <div class="preview orbit-preview">◈</div>
           <div class="game-content">
             <h3>Orbit Rush</h3>
-
             <p>
-              Race along a rotating cylinder, dodge increasingly
-              difficult obstacles, conquer 50 levels, or run forever
-              in Endless Mode to set the longest distance.
+              Rotate a futuristic cylinder to dodge obstacles, complete
+              50 levels, or chase an all-time distance record in Endless Mode.
             </p>
-
-            <a
-              class="play-button protected-game-link"
-              href="games/orbit-runner/"
-            >
+            <a class="play-button protected-game-link" href="games/orbit-runner/">
               ▶ Play Orbit Rush
             </a>
-
             <div class="login-note">Sign in to play this game.</div>
           </div>
         </article>
@@ -456,12 +421,11 @@
     </div>
   </footer>
 
-  <div class="modal-backdrop" id="authModal">
-    <section class="auth-card" role="dialog" aria-modal="true">
+  <div class="modal-backdrop" id="authModal" aria-hidden="true">
+    <section class="auth-card" role="dialog" aria-modal="true" aria-labelledby="authTitle">
       <div class="auth-header">
         <h2 id="authTitle">Sign In</h2>
-
-        <button class="close" id="closeAuthButton" type="button">✕</button>
+        <button class="close-button" id="closeAuthButton" type="button" aria-label="Close">✕</button>
       </div>
 
       <div class="tabs">
@@ -505,10 +469,7 @@
           >
         </div>
 
-        <button class="primary" id="authSubmitButton" type="submit">
-          Sign In
-        </button>
-
+        <button class="primary" id="authSubmitButton" type="submit">Sign In</button>
         <p class="message" id="authMessage"></p>
       </form>
     </section>
@@ -517,11 +478,8 @@
   <script>
     "use strict";
 
-    const SUPABASE_URL =
-      "https://bcarxudxfmsibvnteoaj.supabase.co";
-
-    const SUPABASE_PUBLISHABLE_KEY =
-      "sb_publishable_S7ki2S3tODs4shwWovSY6w_-2jknXXg";
+    const SUPABASE_URL = "https://bcarxudxfmsibvnteoaj.supabase.co";
+    const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_S7ki2S3tODs4shwWovSY6w_-2jknXXg";
 
     const client = window.supabase.createClient(
       SUPABASE_URL,
@@ -544,7 +502,6 @@
     const emailInput = document.getElementById("emailInput");
     const passwordInput = document.getElementById("passwordInput");
     const authSubmitButton = document.getElementById("authSubmitButton");
-
     const signInTab = document.getElementById("signInTab");
     const signUpTab = document.getElementById("signUpTab");
     const signInButton = document.getElementById("signInButton");
@@ -554,53 +511,46 @@
     const closeAuthButton = document.getElementById("closeAuthButton");
     const userChip = document.getElementById("userChip");
     const usernameDisplay = document.getElementById("usernameDisplay");
+    const browseGamesButton = document.getElementById("browseGamesButton");
     const protectedLinks = document.querySelectorAll(".protected-game-link");
 
-    let mode = "signin";
+    let authMode = "signin";
     let currentSession = null;
 
     function showMessage(text, kind = "") {
       authMessage.textContent = text;
       authMessage.className = "message";
-
-      if (kind) {
-        authMessage.classList.add(kind);
-      }
+      if (kind) authMessage.classList.add(kind);
     }
 
     function switchMode(nextMode) {
-      mode = nextMode;
-      const signingUp = mode === "signup";
+      authMode = nextMode;
+      const signingUp = authMode === "signup";
 
       signInTab.classList.toggle("active", !signingUp);
       signUpTab.classList.toggle("active", signingUp);
-
       usernameField.hidden = !signingUp;
       usernameInput.required = signingUp;
-
-      authTitle.textContent = signingUp
-        ? "Create Player Account"
-        : "Sign In";
-
-      authSubmitButton.textContent = signingUp
-        ? "Create Account"
-        : "Sign In";
-
-      passwordInput.autocomplete = signingUp
-        ? "new-password"
-        : "current-password";
-
+      authTitle.textContent = signingUp ? "Create Player Account" : "Sign In";
+      authSubmitButton.textContent = signingUp ? "Create Account" : "Sign In";
+      passwordInput.autocomplete = signingUp ? "new-password" : "current-password";
       showMessage("");
     }
 
     function openModal(nextMode) {
       switchMode(nextMode);
       authModal.classList.add("open");
+      authModal.setAttribute("aria-hidden", "false");
       document.body.classList.add("modal-open");
+      setTimeout(() => {
+        if (nextMode === "signup") usernameInput.focus();
+        else emailInput.focus();
+      }, 0);
     }
 
     function closeModal() {
       authModal.classList.remove("open");
+      authModal.setAttribute("aria-hidden", "true");
       document.body.classList.remove("modal-open");
       showMessage("");
     }
@@ -610,10 +560,10 @@
         .from("profiles")
         .select("username")
         .eq("id", userId)
-        .single();
+        .maybeSingle();
 
       if (error) {
-        console.error(error);
+        console.error("Profile load error:", error);
         return null;
       }
 
@@ -622,7 +572,7 @@
 
     async function updateAccountUI(session) {
       currentSession = session;
-      const signedIn = Boolean(session?.user);
+      const signedIn = Boolean(session && session.user);
 
       signInButton.hidden = signedIn;
       signUpButton.hidden = signedIn;
@@ -634,14 +584,16 @@
         note.style.display = signedIn ? "none" : "block";
       });
 
-      if (signedIn) {
-        const profile = await getProfile(session.user.id);
-
-        usernameDisplay.textContent =
-          profile?.username
-          || session.user.user_metadata?.username
-          || "Player";
+      if (!signedIn) {
+        usernameDisplay.textContent = "Player";
+        return;
       }
+
+      const profile = await getProfile(session.user.id);
+      usernameDisplay.textContent =
+        (profile && profile.username)
+        || session.user.user_metadata?.username
+        || "Player";
     }
 
     async function signUp() {
@@ -670,7 +622,6 @@
       if (data.session) {
         await updateAccountUI(data.session);
         showMessage("Account created. You are signed in!", "success");
-
         setTimeout(closeModal, 700);
       } else {
         showMessage(
@@ -696,26 +647,17 @@
 
       await updateAccountUI(data.session);
       showMessage("Signed in successfully.", "success");
-
       setTimeout(closeModal, 600);
     }
 
     authForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       authSubmitButton.disabled = true;
-
-      showMessage(
-        mode === "signup"
-          ? "Creating account..."
-          : "Signing in..."
-      );
+      showMessage(authMode === "signup" ? "Creating account..." : "Signing in...");
 
       try {
-        if (mode === "signup") {
-          await signUp();
-        } else {
-          await signIn();
-        }
+        if (authMode === "signup") await signUp();
+        else await signIn();
       } catch (error) {
         console.error(error);
         showMessage("Something went wrong. Please try again.", "error");
@@ -731,46 +673,45 @@
     heroSignUpButton.addEventListener("click", () => openModal("signup"));
     closeAuthButton.addEventListener("click", closeModal);
 
+    browseGamesButton.addEventListener("click", () => {
+      document.getElementById("games").scrollIntoView({ behavior: "smooth" });
+    });
+
     authModal.addEventListener("click", (event) => {
-      if (event.target === authModal) {
+      if (event.target === authModal) closeModal();
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && authModal.classList.contains("open")) {
         closeModal();
       }
     });
 
     signOutButton.addEventListener("click", async () => {
       const { error } = await client.auth.signOut();
-
       if (error) {
         alert("Could not sign out: " + error.message);
         return;
       }
-
       await updateAccountUI(null);
     });
 
     protectedLinks.forEach((link) => {
       link.addEventListener("click", (event) => {
-        if (currentSession?.user) {
-          return;
-        }
-
+        if (currentSession && currentSession.user) return;
         event.preventDefault();
         openModal("signin");
         showMessage("Sign in before launching a game.", "error");
       });
     });
 
-    client.auth.onAuthStateChange(async (_event, session) => {
-      await updateAccountUI(session);
+    client.auth.onAuthStateChange((_event, session) => {
+      window.setTimeout(() => updateAccountUI(session), 0);
     });
 
     async function initialize() {
       const { data, error } = await client.auth.getSession();
-
-      if (error) {
-        console.error(error);
-      }
-
+      if (error) console.error("Session load error:", error);
       await updateAccountUI(data?.session || null);
     }
 

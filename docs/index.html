@@ -1,16 +1,9 @@
-Library
-/
-matthews_games_index_with_auth.html
-
-
-
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Play Matthew's Python and Pygame games in your browser.">
+  <meta name="description" content="Play Space Shooter, Frontline Command, Orbit Rush, and more Matthew's Games in your browser.">
   <title>Matthew's Games</title>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -144,7 +137,7 @@ matthews_games_index_with_auth.html
 
     .game-grid {
       display:grid;
-      grid-template-columns:repeat(2, minmax(0, 1fr));
+      grid-template-columns:repeat(3, minmax(0, 1fr));
       gap:26px;
     }
 
@@ -166,6 +159,45 @@ matthews_games_index_with_auth.html
 
     .space { background:radial-gradient(circle, #294d9c, #060d20 60%); }
     .frontline { background:linear-gradient(135deg, #7e714c 45%, #49603f 45%); }
+    .orbit {
+      position:relative;
+      overflow:hidden;
+      background:
+        radial-gradient(
+          ellipse at center 75%,
+          rgba(76, 226, 255, .75) 0 5%,
+          rgba(40, 105, 210, .4) 18%,
+          transparent 42%
+        ),
+        repeating-radial-gradient(
+          ellipse at center 84%,
+          rgba(106, 236, 255, .55) 0 2px,
+          transparent 3px 22px
+        ),
+        linear-gradient(180deg, #070b24, #101e52 56%, #050816);
+    }
+
+    .orbit::before {
+      content:"";
+      position:absolute;
+      width:340px;
+      height:420px;
+      left:50%;
+      top:52%;
+      transform:translate(-50%, -18%);
+      border:3px solid rgba(126, 231, 255, .65);
+      border-radius:50%;
+      box-shadow:
+        0 0 25px rgba(78, 168, 255, .5),
+        inset 0 0 28px rgba(78, 168, 255, .22);
+    }
+
+    .orbit .preview-icon {
+      position:relative;
+      z-index:1;
+      filter:drop-shadow(0 0 18px rgba(126, 231, 255, .8));
+    }
+
 
     .game-content { padding:24px; }
 
@@ -291,6 +323,10 @@ matthews_games_index_with_auth.html
     .message.error { color:var(--red); }
     .message.success { color:var(--green); }
 
+    @media (max-width:1000px) {
+      .game-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    }
+
     @media (max-width:760px) {
       .game-grid { grid-template-columns:1fr; }
       .brand span { display:none; }
@@ -380,6 +416,31 @@ matthews_games_index_with_auth.html
               href="games/frontline-command/"
             >
               ▶ Play Frontline Command
+            </a>
+
+            <div class="login-note">Sign in to play this game.</div>
+          </div>
+        </article>
+
+        <article class="game-card">
+          <div class="preview orbit">
+            <div class="preview-icon">◈</div>
+          </div>
+
+          <div class="game-content">
+            <h3>Orbit Rush</h3>
+
+            <p>
+              Race along a rotating cylinder, dodge increasingly
+              difficult obstacles, conquer 50 levels, or run forever
+              in Endless Mode to set the longest distance.
+            </p>
+
+            <a
+              class="play-button protected-game-link"
+              href="games/orbit-runner/"
+            >
+              ▶ Play Orbit Rush
             </a>
 
             <div class="login-note">Sign in to play this game.</div>

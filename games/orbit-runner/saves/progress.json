@@ -1,0 +1,22 @@
+{
+    "save_version": 1,
+    "highest_unlocked_level": 1,
+    "completed_levels": [],
+    "level_best_times": {},
+    "level_best_scores": {},
+    "endless_best_distance": 0,
+    "total_distance": 0,
+    "total_runs": 0,
+    "total_crashes": 0,
+    "powerups_collected": 0,
+    "perfect_levels": 0,
+    "achievements": [],
+    "selected_player_skin": "default",
+    "unlocked_player_skins": [
+        "default"
+    ],
+    "selected_cylinder_theme": "neon_blue",
+    "unlocked_cylinder_themes": [
+        "neon_blue"
+    ]
+}

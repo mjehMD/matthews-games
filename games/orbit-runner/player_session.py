@@ -7,210 +7,150 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
-
-SUPABASE_PROJECT_URL = "https://bcarxudxfmsibvnteoaj.supabase.co"
-SUPABASE_PUBLISHABLE_KEY = "sb_publishable_S7ki2S3tODs4shwWovSY6w_-2jknXXg"
-AUTH_STORAGE_KEY = "sb-bcarxudxfmsibvnteoaj-auth-token"
-
-AUTH_USER_ENDPOINT = f"{SUPABASE_PROJECT_URL}/auth/v1/user"
-PROFILES_ENDPOINT = f"{SUPABASE_PROJECT_URL}/rest/v1/profiles"
+from config import SUPABASE_KEY, SUPABASE_URL
 
 IS_WEB = sys.platform in ("emscripten", "wasi")
+PROJECT_REFERENCE = "bcarxudxfmsibvnteoaj"
+AUTH_STORAGE_KEY = f"sb-{PROJECT_REFERENCE}-auth-token"
 
 
 @dataclass
 class PlayerSession:
     signed_in: bool = False
     user_id: str = ""
-    username: str = ""
+    username: str = "Player"
     access_token: str = ""
-    message: str = "Sign in on the website to play."
+    role: str = "player"
+    message: str = "Sign in on Matthew's Games before playing."
 
 
-def _find_access_token(value: Any) -> str:
+def _find_token(value: Any) -> str:
     if isinstance(value, dict):
-        token = value.get("access_token")
-        if token:
-            return str(token)
-
+        if value.get("access_token"):
+            return str(value["access_token"])
         for nested in value.values():
-            token = _find_access_token(nested)
+            token = _find_token(nested)
             if token:
                 return token
-
     elif isinstance(value, list):
         for nested in value:
-            token = _find_access_token(nested)
+            token = _find_token(nested)
             if token:
                 return token
-
     return ""
 
 
-def _read_browser_access_token() -> str:
+def _read_token() -> str:
     if not IS_WEB:
         return ""
-
     try:
-        raw_value = platform.window.localStorage.getItem(
-            AUTH_STORAGE_KEY
-        )
-
-        if not raw_value:
-            return ""
-
-        return _find_access_token(
-            json.loads(str(raw_value))
-        )
+        raw = platform.window.localStorage.getItem(AUTH_STORAGE_KEY)
+        return _find_token(json.loads(str(raw))) if raw else ""
     except Exception:
         return ""
 
 
-_BROWSER_FETCH_READY = False
+_FETCH_INSTALLED = False
 
 
-def _install_browser_fetch() -> None:
-    global _BROWSER_FETCH_READY
-
-    if not IS_WEB or _BROWSER_FETCH_READY:
+def _install_fetch() -> None:
+    global _FETCH_INSTALLED
+    if not IS_WEB or _FETCH_INSTALLED:
         return
-
-    platform.window.eval("""
-        window.MatthewsSessionFetch = {
-            request: function* (url, apiKey, token) {
-                let finished = false;
+    platform.window.eval(r'''
+        window.OrbitRushSessionV3 = {
+            get: function* (url, key, token) {
+                let done = false;
                 let result = "";
-
                 fetch(url, {
                     method: "GET",
                     headers: {
-                        "apikey": apiKey,
+                        "apikey": key,
                         "Authorization": "Bearer " + token,
                         "Accept": "application/json"
                     }
-                })
-                .then(async response => {
+                }).then(async response => {
                     result = JSON.stringify({
                         ok: response.ok,
                         status: response.status,
                         text: await response.text()
                     });
-                    finished = true;
-                })
-                .catch(error => {
-                    result = JSON.stringify({
-                        ok: false,
-                        status: 0,
-                        text: String(error)
-                    });
-                    finished = true;
+                    done = true;
+                }).catch(error => {
+                    result = JSON.stringify({ok:false,status:0,text:String(error)});
+                    done = true;
                 });
-
-                while (!finished) {
-                    yield;
-                }
-
+                while (!done) yield;
                 yield result;
             }
         };
-    """)
+    ''')
+    _FETCH_INSTALLED = True
 
-    _BROWSER_FETCH_READY = True
 
-
-async def _browser_get(
-    url: str,
-    token: str,
-) -> tuple[bool, int, str]:
-    _install_browser_fetch()
-
+async def _get(url: str, token: str) -> tuple[bool, int, str]:
+    _install_fetch()
     try:
-        raw_result = await platform.jsiter(
-            platform.window.MatthewsSessionFetch.request(
-                url,
-                SUPABASE_PUBLISHABLE_KEY,
-                token,
-            )
+        raw = await platform.jsiter(
+            platform.window.OrbitRushSessionV3.get(url, SUPABASE_KEY, token)
         )
-
-        result = json.loads(str(raw_result))
-
-        return (
-            bool(result.get("ok", False)),
-            int(result.get("status", 0)),
-            str(result.get("text", "")),
-        )
+        result = json.loads(str(raw))
+        return bool(result.get("ok")), int(result.get("status", 0)), str(result.get("text", ""))
     except Exception as error:
         return False, 0, str(error)
 
 
 async def load_player_session() -> PlayerSession:
+    # Desktop mode is intentionally available for testing.
     if not IS_WEB:
         return PlayerSession(
-            message=(
-                "This version requires the website. "
-                "Open the game from Matthew's Games."
-            )
+            signed_in=True,
+            user_id="desktop-test",
+            username="Desktop Player",
+            access_token="",
+            role="player",
+            message="Desktop test mode.",
         )
 
-    access_token = _read_browser_access_token()
-
-    if not access_token:
+    token = _read_token()
+    if not token:
         return PlayerSession()
 
-    success, status, user_text = await _browser_get(
-        AUTH_USER_ENDPOINT,
-        access_token,
-    )
-
-    if not success:
-        return PlayerSession(
-            message=f"Sign-in session could not be verified ({status})."
-        )
+    ok, status, text = await _get(f"{SUPABASE_URL}/auth/v1/user", token)
+    if not ok:
+        return PlayerSession(message=f"Could not verify account ({status}).")
 
     try:
-        user_data = json.loads(user_text)
-        user_id = str(user_data.get("id", ""))
+        user = json.loads(text)
+        user_id = str(user.get("id", ""))
     except (json.JSONDecodeError, AttributeError):
-        user_id = ""
+        return PlayerSession(message="Invalid account response.")
 
     if not user_id:
-        return PlayerSession(
-            message="The signed-in account could not be identified."
-        )
+        return PlayerSession(message="The account has no user ID.")
 
     profile_url = (
-        f"{PROFILES_ENDPOINT}"
-        f"?select=username"
-        f"&id=eq.{user_id}"
-        f"&limit=1"
+        f"{SUPABASE_URL}/rest/v1/profiles"
+        f"?select=username,role&id=eq.{user_id}&limit=1"
     )
+    ok, status, text = await _get(profile_url, token)
+    username = "Player"
+    role = "player"
 
-    success, status, profile_text = await _browser_get(
-        profile_url,
-        access_token,
-    )
-
-    if not success:
-        return PlayerSession(
-            message=f"Player profile could not be loaded ({status})."
-        )
-
-    try:
-        rows = json.loads(profile_text)
-        username = str(rows[0]["username"]).strip()[:16]
-    except (json.JSONDecodeError, IndexError, KeyError, TypeError):
-        username = ""
-
-    if not username:
-        return PlayerSession(
-            message="No gaming username was found for this account."
-        )
+    if ok:
+        try:
+            rows = json.loads(text)
+            if isinstance(rows, list) and rows:
+                username = str(rows[0].get("username", "Player")).strip()[:16] or "Player"
+                role = "admin" if str(rows[0].get("role", "player")).lower() == "admin" else "player"
+        except (json.JSONDecodeError, AttributeError):
+            pass
 
     return PlayerSession(
         signed_in=True,
         user_id=user_id,
         username=username,
-        access_token=access_token,
-        message="Signed-in player loaded.",
+        access_token=token,
+        role=role,
+        message=f"Signed in as {username}.",
     )

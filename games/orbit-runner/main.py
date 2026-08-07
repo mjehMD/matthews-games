@@ -127,6 +127,9 @@ from player_session import (
 
 IS_WEB = sys.platform in ("emscripten", "wasi")
 
+# Visible menu version for this browser-performance update.
+ORBIT_RUSH_BUILD_VERSION = "0.1.1"
+
 
 # ============================================================
 # DRAWING HELPERS
@@ -415,9 +418,19 @@ class EndlessManager:
 
         target = ENDLESS_GENERATION_AHEAD_DISTANCE
 
+        sections_generated_this_frame = 0
+        maximum_sections_per_frame = (
+            1
+            if IS_WEB
+            else 3
+        )
+
         while (
             furthest_distance < target
-            and len(world.obstacles) < ENDLESS_MAX_ACTIVE_OBSTACLES
+            and len(world.obstacles)
+            < ENDLESS_MAX_ACTIVE_OBSTACLES
+            and sections_generated_this_frame
+            < maximum_sections_per_frame
         ):
             difficulty = calculate_endless_difficulty(world.distance)
 
@@ -440,6 +453,8 @@ class EndlessManager:
                 world.add_collectible(collectible)
 
             self.section_count += 1
+            sections_generated_this_frame += 1
+
             self.next_section_distance = (
                 section.start_distance
                 + section.length
@@ -933,10 +948,17 @@ class OrbitRush:
     def start_endless(self) -> None:
         self.game_mode = MODE_ENDLESS
         self.current_level = None
-        self.world.reset(calculate_endless_speed(0))
+        self.world.reset(
+            calculate_endless_speed(0)
+        )
+
         self.endless_manager.reset()
-        self.endless_manager.update(self.world)
-        self.run_started_at = pygame.time.get_ticks()
+
+        # Generation begins in update(), one section per browser
+        # frame, preventing the Play button from locking the page.
+        self.run_started_at = (
+            pygame.time.get_ticks()
+        )
         self.state = STATE_PLAYING
 
     def start_level(self, level_number: int) -> None:
@@ -1251,98 +1273,170 @@ class OrbitRush:
         )
 
     def draw_cylinder(self) -> None:
+        """
+        Draw a browser-friendly cylinder.
+
+        The first renderer built more than one thousand filled
+        polygons every frame. That was too expensive in Pygbag and
+        could make the browser appear frozen after gameplay started.
+
+        This version draws a smaller number of rings and lane lines
+        while keeping the rotating-cylinder appearance.
+        """
         projector = self.world.projector
 
-        # Filled cylinder bands.
-        band_points: list[list[tuple[int, int]]] = []
+        # Dark body beneath the line work.
+        body_rect = pygame.Rect(
+            round(
+                CYLINDER_CENTER_X
+                - CYLINDER_NEAR_RADIUS
+            ),
+            CYLINDER_HORIZON_Y - 10,
+            round(
+                CYLINDER_NEAR_RADIUS * 2
+            ),
+            round(
+                CYLINDER_PLAYER_Y
+                - CYLINDER_HORIZON_Y
+                + CYLINDER_NEAR_RADIUS * 0.20
+            ),
+        )
 
-        samples = 48
+        pygame.draw.ellipse(
+            self.screen,
+            CYLINDER_DARK_COLOUR,
+            body_rect,
+        )
 
-        for ring_index in range(CYLINDER_RING_COUNT):
-            distance = min(
-                projector.visible_distance,
-                ring_index * CYLINDER_RING_SPACING,
+        # Use fewer rings in the browser to reduce frame cost.
+        ring_count = 14 if IS_WEB else 20
+        ring_step = (
+            projector.visible_distance
+            / max(
+                1,
+                ring_count - 1,
             )
+        )
 
-            points: list[tuple[int, int]] = []
+        ring_distances = [
+            ring_index * ring_step
+            for ring_index in range(
+                ring_count
+            )
+        ]
 
-            for sample in range(samples + 1):
-                angle = sample / samples * 360.0
-                projection = projector.project(angle, distance)
+        # Each ring is a compact projected polyline.
+        ring_samples = 28 if IS_WEB else 40
 
-                points.append(
-                    (round(projection.x), round(projection.y))
+        for ring_index, distance in enumerate(
+            ring_distances
+        ):
+            points: list[
+                tuple[int, int]
+            ] = []
+
+            for sample in range(
+                ring_samples + 1
+            ):
+                angle = (
+                    sample
+                    / ring_samples
+                    * 360.0
                 )
 
-            band_points.append(points)
+                projection = projector.project(
+                    angle,
+                    distance,
+                )
 
-        for index in range(len(band_points) - 1, 0, -1):
-            first = band_points[index]
-            second = band_points[index - 1]
+                points.append(
+                    (
+                        round(projection.x),
+                        round(projection.y),
+                    )
+                )
 
-            colour = (
-                CYLINDER_DARK_COLOUR
-                if index % 2
-                else CYLINDER_BASE_COLOUR
-            )
-
-            for sample in range(samples):
-                polygon = [
-                    first[sample],
-                    first[sample + 1],
-                    second[sample + 1],
-                    second[sample],
-                ]
-                pygame.draw.polygon(self.screen, colour, polygon)
-
-        # Rings.
-        for ring_index, points in enumerate(band_points):
             colour = (
                 CYLINDER_GLOW_COLOUR
-                if ring_index % 5 == 0
+                if ring_index % 4 == 0
                 else CYLINDER_RING_COLOUR
             )
-            width = 2 if ring_index % 5 == 0 else 1
+
             pygame.draw.lines(
                 self.screen,
                 colour,
                 False,
                 points,
-                width=width,
+                width=(
+                    2
+                    if ring_index % 4 == 0
+                    else 1
+                ),
             )
 
-        # Lane lines.
-        for lane in range(CYLINDER_LANE_COUNT):
-            points: list[tuple[int, int]] = []
+        # Lane lines create the rotating-cylinder effect.
+        lane_distance_samples = 16 if IS_WEB else 22
 
-            for ring_index in range(CYLINDER_RING_COUNT):
-                distance = min(
-                    projector.visible_distance,
-                    ring_index * CYLINDER_RING_SPACING,
+        for lane in range(
+            CYLINDER_LANE_COUNT
+        ):
+            points: list[
+                tuple[int, int]
+            ] = []
+
+            for sample in range(
+                lane_distance_samples
+            ):
+                distance = (
+                    sample
+                    / max(
+                        1,
+                        lane_distance_samples - 1,
+                    )
+                    * projector.visible_distance
                 )
-                projection = projector.project_lane(lane, distance)
-                points.append((round(projection.x), round(projection.y)))
+
+                projection = projector.project_lane(
+                    lane,
+                    distance,
+                )
+
+                points.append(
+                    (
+                        round(projection.x),
+                        round(projection.y),
+                    )
+                )
 
             pygame.draw.lines(
                 self.screen,
                 CYLINDER_LANE_COLOUR,
                 False,
                 points,
-                width=2 if lane % 3 == 0 else 1,
+                width=(
+                    2
+                    if lane % 3 == 0
+                    else 1
+                ),
             )
 
-        if ENABLE_GLOW_EFFECTS:
-            pygame.draw.ellipse(
-                self.screen,
-                CYLINDER_GLOW_COLOUR,
-                pygame.Rect(
-                    CYLINDER_CENTER_X - round(CYLINDER_FAR_RADIUS),
-                    CYLINDER_HORIZON_Y - 12,
-                    round(CYLINDER_FAR_RADIUS * 2),
-                    24,
+        # Horizon glow.
+        pygame.draw.ellipse(
+            self.screen,
+            CYLINDER_GLOW_COLOUR,
+            pygame.Rect(
+                CYLINDER_CENTER_X
+                - round(
+                    CYLINDER_FAR_RADIUS
                 ),
-                width=2,
-            )
+                CYLINDER_HORIZON_Y - 12,
+                round(
+                    CYLINDER_FAR_RADIUS * 2
+                ),
+                24,
+            ),
+            width=2,
+        )
 
     # --------------------------------------------------------
     # STATE DRAWING
@@ -1502,7 +1596,7 @@ class OrbitRush:
             draw_text(
                 self.screen,
                 self.version_font,
-                format_version(),
+                f"Version {ORBIT_RUSH_BUILD_VERSION}",
                 LIGHT_GREY,
                 GAME_WIDTH - 18,
                 GAME_HEIGHT - 28,
@@ -1917,7 +2011,7 @@ class OrbitRush:
         draw_text(
             self.screen,
             self.version_font,
-            format_version(),
+            f"Version {ORBIT_RUSH_BUILD_VERSION}",
             LIGHT_GREY,
             GAME_WIDTH - 18,
             GAME_HEIGHT - 28,

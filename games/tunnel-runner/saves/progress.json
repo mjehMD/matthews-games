@@ -1,0 +1,25 @@
+{
+    "save_version": 1,
+    "highest_unlocked_level": 3,
+    "completed_levels": [
+        1,
+        2
+    ],
+    "level_best_times": {
+        "1": 17.373,
+        "2": 47.883
+    },
+    "level_attempts": {
+        "1": 2,
+        "2": 1
+    },
+    "endless_best_distance": 522,
+    "total_runs": 6,
+    "total_crashes": 3,
+    "total_distance": 2516,
+    "achievements": [
+        "first_run",
+        "first_level",
+        "endless_500"
+    ]
+}

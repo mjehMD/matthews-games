@@ -52,18 +52,8 @@ from geometry import (
 # ============================================================
 # TUNNEL RUNNER
 # OBSTACLE SYSTEM
-# VERSION 0.1.1
-# ============================================================
-#
-# FIXES:
-#
-# - Rotating-bar collision now matches the visible bar.
-# - Spinners/crosses have guaranteed usable gaps.
-# - Collision padding is less aggressive.
-# - Static obstacle meshes are cached.
-# - Collision only checks obstacles near the player.
-# - Endless spinning speeds are more reasonable.
-#
+# VERSION 0.1.3
+# PERFORMANCE + FAIR COLLISION BUILD
 # ============================================================
 
 
@@ -71,58 +61,61 @@ OBSTACLE_CROSS = "cross"
 
 EPSILON = 0.000001
 
-MIN_PLAYABLE_GAP = 48.0
-MIN_SPINNER_GAP = 64.0
-MIN_BAR_GAP = 125.0
+# ============================================================
+# FAIRNESS SETTINGS
+# ============================================================
 
-MAX_COLLISION_PADDING = 8.0
+MIN_PLAYABLE_GAP = 50.0
+
+MIN_SPINNER_GAP = 66.0
+
+MIN_BAR_GAP = 128.0
+
+MAX_COLLISION_PADDING = 7.0
+
+
+# ============================================================
+# PERFORMANCE SETTINGS
+# ============================================================
+
+# Normal walls used to use many more pieces.
+# 32 is still visually smooth while being cheaper.
+
+WALL_RENDER_SEGMENTS = 32
+
+# Finish ring does not need 32+ pieces.
+
+FINISH_RENDER_SEGMENTS = 24
+
+# Obstacles beyond this distance do not need animation updates.
+
+ANIMATION_DISTANCE = 230.0
+
+# Collision system only needs a tiny region around the player.
+
+COLLISION_SEARCH_DISTANCE = 2.2
 
 
 # ============================================================
 # HELPERS
 # ============================================================
 
-def lerp(
-    first: float,
-    second: float,
-    amount: float,
-) -> float:
-    return (
-        first
-        + (
-            second
-            - first
-        )
-        * amount
-    )
-
-
-def cyclic_sine(
-    time_seconds: float,
-    speed: float,
-    phase: float = 0.0,
-) -> float:
-    return math.sin(
-        time_seconds
-        * speed
-        + phase
-    )
-
-
 def safe_colour(
     colour: tuple[int, int, int],
     multiplier: float,
 ) -> tuple[int, int, int]:
+
     return multiply_colour(
         colour,
         multiplier,
     )
 
 
-def collision_padding(
-) -> float:
+def collision_padding() -> float:
+
     return min(
         MAX_COLLISION_PADDING,
+
         max(
             0.0,
             PLAYER_COLLISION_ANGLE,
@@ -146,8 +139,10 @@ class SafeArc:
         *,
         padding: float = 0.0,
     ) -> bool:
-        effective_width = max(
+
+        usable_width = max(
             0.0,
+
             self.width
             - padding
             * 2.0,
@@ -157,10 +152,12 @@ class SafeArc:
             normalize_degrees(
                 player_angle
             ),
+
             normalize_degrees(
                 self.center
             ),
-            effective_width,
+
+            usable_width,
         )
 
 
@@ -175,8 +172,6 @@ class ObstacleState:
     movement_offset: float = 0.0
 
     animation_time: float = 0.0
-
-    collision_checked: bool = False
 
     passed: bool = False
 
@@ -221,6 +216,8 @@ class TunnelObstacle:
         default_factory=ObstacleState
     )
 
+    # Static obstacles only need their mesh generated once.
+
     _cached_meshes: list[Mesh3D] | None = field(
         default=None,
         init=False,
@@ -230,6 +227,7 @@ class TunnelObstacle:
     def __post_init__(
         self,
     ) -> None:
+
         self.angle = normalize_degrees(
             self.angle
         )
@@ -259,6 +257,7 @@ class TunnelObstacle:
     def animated(
         self,
     ) -> bool:
+
         return (
             abs(
                 self.rotation_speed
@@ -278,6 +277,7 @@ class TunnelObstacle:
         self,
         delta_time: float,
     ) -> None:
+
         if not self.enabled:
             return
 
@@ -285,9 +285,13 @@ class TunnelObstacle:
             delta_time
         )
 
-        if abs(
-            self.rotation_speed
-        ) > EPSILON:
+        if (
+            abs(
+                self.rotation_speed
+            )
+            > EPSILON
+        ):
+
             self.state.rotation = (
                 normalize_degrees(
                     self.state.rotation
@@ -307,51 +311,28 @@ class TunnelObstacle:
             )
             > EPSILON
         ):
+
             self.state.movement_offset = (
-                cyclic_sine(
-                    self.state.animation_time,
-                    self.movement_speed,
-                    self.phase,
+                math.sin(
+                    self.state.animation_time
+                    * self.movement_speed
+                    + self.phase
                 )
+
                 * self.movement_amount
             )
+
+    # ========================================================
+    # CURRENT ANGLE
+    # ========================================================
 
     def current_angle(
         self,
     ) -> float:
+
         return normalize_degrees(
             self.state.rotation
             + self.state.movement_offset
-        )
-
-    # ========================================================
-    # VISIBILITY
-    # ========================================================
-
-    def distance_from_camera(
-        self,
-        camera_z: float,
-    ) -> float:
-        return (
-            self.z
-            - camera_z
-        )
-
-    def visible(
-        self,
-        camera_z: float,
-        visible_distance: float,
-    ) -> bool:
-        distance = (
-            self.distance_from_camera(
-                camera_z
-            )
-        )
-
-        return (
-            -2.0
-            <= distance
-            <= visible_distance
         )
 
     # ========================================================
@@ -361,6 +342,7 @@ class TunnelObstacle:
     def safe_arcs(
         self,
     ) -> list[SafeArc]:
+
         return [
             SafeArc(
                 self.current_angle(),
@@ -376,18 +358,13 @@ class TunnelObstacle:
         self,
         player_angle: float,
     ) -> bool:
+
         if (
             self.obstacle_type
             == OBSTACLE_FINISH
         ):
+
             return True
-
-        arcs = (
-            self.safe_arcs()
-        )
-
-        if not arcs:
-            return False
 
         padding = (
             collision_padding()
@@ -399,7 +376,8 @@ class TunnelObstacle:
                 padding=padding,
             )
 
-            for arc in arcs
+            for arc
+            in self.safe_arcs()
         )
 
     # ========================================================
@@ -410,13 +388,12 @@ class TunnelObstacle:
         self,
         camera_z: float,
     ) -> bool:
-        distance = abs(
-            self.z
-            - camera_z
-        )
 
         return (
-            distance
+            abs(
+                self.z
+                - camera_z
+            )
             <= max(
                 OBSTACLE_COLLISION_DISTANCE,
 
@@ -430,30 +407,33 @@ class TunnelObstacle:
         camera_z: float,
         player_angle: float,
     ) -> bool:
+
         if (
             not self.enabled
-
             or self.state.passed
         ):
+
             return False
 
         if not self.collision_active(
             camera_z
         ):
-            return False
 
-        self.state.collision_checked = (
-            True
-        )
+            return False
 
         return not self.player_is_safe(
             player_angle
         )
 
+    # ========================================================
+    # PASSED
+    # ========================================================
+
     def update_passed_state(
         self,
         camera_z: float,
     ) -> bool:
+
         if self.state.passed:
             return False
 
@@ -465,11 +445,33 @@ class TunnelObstacle:
                 self.thickness,
             )
         ):
+
             self.state.passed = True
 
             return True
 
         return False
+
+    # ========================================================
+    # VISIBILITY
+    # ========================================================
+
+    def visible(
+        self,
+        camera_z: float,
+        visible_distance: float,
+    ) -> bool:
+
+        distance = (
+            self.z
+            - camera_z
+        )
+
+        return (
+            -2.0
+            <= distance
+            <= visible_distance
+        )
 
     # ========================================================
     # MESH CACHE
@@ -478,12 +480,13 @@ class TunnelObstacle:
     def build_meshes(
         self,
     ) -> list[Mesh3D]:
+
         if (
             not self.animated
-
             and self._cached_meshes
             is not None
         ):
+
             return (
                 self._cached_meshes
             )
@@ -495,6 +498,7 @@ class TunnelObstacle:
         )
 
         if not self.animated:
+
             self._cached_meshes = (
                 meshes
             )
@@ -503,25 +507,13 @@ class TunnelObstacle:
 
 
 # ============================================================
-# NORMAL WALL
+# WALL
 # ============================================================
 
 class WallObstacle(
     TunnelObstacle
 ):
-    def safe_arcs(
-        self,
-    ) -> list[SafeArc]:
-        return [
-            SafeArc(
-                self.current_angle(),
-
-                max(
-                    MIN_PLAYABLE_GAP,
-                    self.safe_width,
-                ),
-            )
-        ]
+    pass
 
 
 # ============================================================
@@ -531,9 +523,11 @@ class WallObstacle(
 class MovingGapObstacle(
     WallObstacle
 ):
+
     def current_angle(
         self,
     ) -> float:
+
         movement = (
             math.sin(
                 self.state.animation_time
@@ -565,9 +559,11 @@ class MovingGapObstacle(
 class ClosingWallObstacle(
     WallObstacle
 ):
+
     def safe_arcs(
         self,
     ) -> list[SafeArc]:
+
         pulse = (
             math.sin(
                 self.state.animation_time
@@ -594,15 +590,19 @@ class ClosingWallObstacle(
             * 0.62,
         )
 
+        width = (
+            minimum
+            + (
+                maximum
+                - minimum
+            )
+            * pulse
+        )
+
         return [
             SafeArc(
                 self.current_angle(),
-
-                lerp(
-                    minimum,
-                    maximum,
-                    pulse,
-                ),
+                width,
             )
         ]
 
@@ -614,19 +614,11 @@ class ClosingWallObstacle(
 class SingleBarObstacle(
     TunnelObstacle
 ):
-    """
-    The visible bar passes through the middle of the tunnel.
-
-    A horizontal bar touches the tunnel at 90° and 270°.
-
-    Therefore the safest areas are around 0° and 180°.
-
-    The old version incorrectly treated this as a cross.
-    """
 
     def safe_arcs(
         self,
     ) -> list[SafeArc]:
+
         angle = (
             self.current_angle()
         )
@@ -653,33 +645,30 @@ class SingleBarObstacle(
 
 
 # ============================================================
-# CROSS / DOUBLE BAR / SPINNER
+# CROSS / SPINNER
 # ============================================================
 
 class CrossObstacle(
     TunnelObstacle
 ):
-    """
-    Four arms block the tunnel.
-
-    Safe openings are halfway between the arms.
-    """
 
     def safe_arcs(
         self,
     ) -> list[SafeArc]:
+
         rotation = (
             self.current_angle()
         )
 
-        width = max(
-            MIN_SPINNER_GAP,
-            self.safe_width,
-        )
+        width = clamp(
+            max(
+                MIN_SPINNER_GAP,
+                self.safe_width,
+            ),
 
-        width = min(
+            MIN_SPINNER_GAP,
+
             82.0,
-            width,
         )
 
         return [
@@ -694,7 +683,8 @@ class CrossObstacle(
                 width,
             )
 
-            for index in range(
+            for index
+            in range(
                 4
             )
         ]
@@ -707,20 +697,17 @@ class CrossObstacle(
 class BladeObstacle(
     TunnelObstacle
 ):
+
     blade_count: int = 1
 
     def safe_arcs(
         self,
     ) -> list[SafeArc]:
+
         count = max(
             1,
-
             int(
-                getattr(
-                    self,
-                    "blade_count",
-                    1,
-                )
+                self.blade_count
             ),
         )
 
@@ -736,14 +723,14 @@ class BladeObstacle(
             - 38.0,
         )
 
-        rotation = (
+        angle = (
             self.current_angle()
         )
 
         return [
             SafeArc(
                 normalize_degrees(
-                    rotation
+                    angle
                     + index
                     * spacing
                     + spacing
@@ -753,41 +740,36 @@ class BladeObstacle(
                 safe_width,
             )
 
-            for index in range(
+            for index
+            in range(
                 count
             )
         ]
 
 
 # ============================================================
-# TRIANGLE / WEDGE
+# TRIANGLE
 # ============================================================
 
 class TriangleObstacle(
     TunnelObstacle
 ):
+
     triangle_count: int = 1
 
     def safe_arcs(
         self,
     ) -> list[SafeArc]:
-        count = max(
-            1,
-
-            int(
-                getattr(
-                    self,
-                    "triangle_count",
-                    1,
-                )
-            ),
-        )
 
         rotation = (
             self.current_angle()
         )
 
-        if count == 1:
+        if (
+            self.triangle_count
+            <= 1
+        ):
+
             return [
                 SafeArc(
                     normalize_degrees(
@@ -806,7 +788,7 @@ class TriangleObstacle(
                     + 90.0
                 ),
 
-                82.0,
+                84.0,
             ),
 
             SafeArc(
@@ -815,7 +797,7 @@ class TriangleObstacle(
                     + 270.0
                 ),
 
-                82.0,
+                84.0,
             ),
         ]
 
@@ -827,9 +809,11 @@ class TriangleObstacle(
 class FinishObstacle(
     TunnelObstacle
 ):
+
     def safe_arcs(
         self,
     ) -> list[SafeArc]:
+
         return [
             SafeArc(
                 0.0,
@@ -845,16 +829,9 @@ class FinishObstacle(
 def create_multi_gap_wall_faces(
     *,
     z: float,
-
     safe_arcs: list[SafeArc],
-
     colour: tuple[int, int, int],
-
     secondary_colour: tuple[int, int, int],
-
-    radius: float = TUNNEL_RADIUS,
-
-    segments: int = 48,
 ) -> list[Face3D]:
 
     faces: list[
@@ -863,12 +840,13 @@ def create_multi_gap_wall_faces(
 
     segment_angle = (
         360.0
-        / segments
+        / WALL_RENDER_SEGMENTS
     )
 
     for index in range(
-        segments
+        WALL_RENDER_SEGMENTS
     ):
+
         start_angle = (
             index
             * segment_angle
@@ -879,28 +857,31 @@ def create_multi_gap_wall_faces(
             + segment_angle
         )
 
-        midpoint = (
+        middle = (
             start_angle
-            + end_angle
-        ) / 2.0
+            + segment_angle
+            / 2.0
+        )
 
         if any(
             angle_in_arc(
-                midpoint,
+                middle,
                 arc.center,
                 arc.width,
             )
 
-            for arc in safe_arcs
+            for arc
+            in safe_arcs
         ):
-            continue
 
-        inner_radius = 0.18
+            continue
 
         face_colour = (
             colour
 
-            if index % 2 == 0
+            if index
+            % 2
+            == 0
 
             else secondary_colour
         )
@@ -911,58 +892,47 @@ def create_multi_gap_wall_faces(
                     tunnel_point(
                         start_angle,
                         z,
-                        radius=inner_radius,
+                        radius=0.18,
                     ),
 
                     tunnel_point(
                         start_angle,
                         z,
-                        radius=radius,
+                        radius=TUNNEL_RADIUS,
                     ),
 
                     tunnel_point(
                         end_angle,
                         z,
-                        radius=radius,
+                        radius=TUNNEL_RADIUS,
                     ),
 
                     tunnel_point(
                         end_angle,
                         z,
-                        radius=inner_radius,
+                        radius=0.18,
                     ),
                 ],
 
                 colour=face_colour,
 
-                outline_colour=(
-                    safe_colour(
-                        face_colour,
-                        1.20,
-                    )
-                ),
+                # Removing dozens of outline draws makes walls
+                # substantially cheaper.
 
-                outline_width=1,
+                outline_colour=None,
+
+                outline_width=0,
 
                 double_sided=True,
-
-                metadata={
-                    "obstacle_surface":
-                        True,
-                },
             )
         )
 
     return faces
 
 
-def create_thick_wall_mesh(
+def create_wall_mesh(
     obstacle: TunnelObstacle,
 ) -> Mesh3D:
-
-    safe_arcs = (
-        obstacle.safe_arcs()
-    )
 
     front_z = (
         obstacle.z
@@ -976,47 +946,52 @@ def create_thick_wall_mesh(
         / 2.0
     )
 
+    arcs = (
+        obstacle.safe_arcs()
+    )
+
+    front_faces = (
+        create_multi_gap_wall_faces(
+            z=front_z,
+
+            safe_arcs=arcs,
+
+            colour=(
+                obstacle.primary_colour
+            ),
+
+            secondary_colour=(
+                obstacle.secondary_colour
+            ),
+        )
+    )
+
+    back_faces = (
+        create_multi_gap_wall_faces(
+            z=back_z,
+
+            safe_arcs=arcs,
+
+            colour=safe_colour(
+                obstacle.primary_colour,
+                0.70,
+            ),
+
+            secondary_colour=safe_colour(
+                obstacle.secondary_colour,
+                0.70,
+            ),
+        )
+    )
+
     return Mesh3D(
         faces=(
-            create_multi_gap_wall_faces(
-                z=front_z,
-
-                safe_arcs=safe_arcs,
-
-                colour=(
-                    obstacle.primary_colour
-                ),
-
-                secondary_colour=(
-                    obstacle.secondary_colour
-                ),
-            )
-
-            +
-
-            create_multi_gap_wall_faces(
-                z=back_z,
-
-                safe_arcs=safe_arcs,
-
-                colour=(
-                    safe_colour(
-                        obstacle.primary_colour,
-                        0.72,
-                    )
-                ),
-
-                secondary_colour=(
-                    safe_colour(
-                        obstacle.secondary_colour,
-                        0.72,
-                    )
-                ),
-            )
+            front_faces
+            + back_faces
         ),
 
         metadata={
-            "type":
+            "obstacle_type":
                 obstacle.obstacle_type,
 
             "z":
@@ -1032,16 +1007,9 @@ def create_thick_wall_mesh(
 def create_bar_mesh(
     *,
     z: float,
-
     angle: float,
-
-    length: float,
-
-    width: float,
-
-    depth: float,
-
     colour: tuple[int, int, int],
+    thickness: float = 0.75,
 ) -> Mesh3D:
 
     mesh = create_box_mesh(
@@ -1052,9 +1020,12 @@ def create_bar_mesh(
         ),
 
         size=Vec3(
-            length,
-            width,
-            depth,
+            TUNNEL_RADIUS
+            * 2.12,
+
+            1.0,
+
+            thickness,
         ),
 
         colour=colour,
@@ -1079,7 +1050,7 @@ def create_bar_mesh(
     )
 
 
-def build_rotating_bar(
+def build_bar(
     obstacle: TunnelObstacle,
     *,
     double: bool = False,
@@ -1095,24 +1066,18 @@ def build_rotating_bar(
 
             angle=angle,
 
-            length=(
-                TUNNEL_RADIUS
-                * 2.15
-            ),
-
-            width=1.05,
-
-            depth=(
-                obstacle.thickness
-            ),
-
             colour=(
                 obstacle.primary_colour
+            ),
+
+            thickness=(
+                obstacle.thickness
             ),
         )
     ]
 
     if double:
+
         meshes.append(
             create_bar_mesh(
                 z=obstacle.z,
@@ -1122,19 +1087,12 @@ def build_rotating_bar(
                     + 90.0
                 ),
 
-                length=(
-                    TUNNEL_RADIUS
-                    * 2.15
-                ),
-
-                width=1.05,
-
-                depth=(
-                    obstacle.thickness
-                ),
-
                 colour=(
                     obstacle.secondary_colour
+                ),
+
+                thickness=(
+                    obstacle.thickness
                 ),
             )
         )
@@ -1142,92 +1100,23 @@ def build_rotating_bar(
     return meshes
 
 
-def build_cross(
-    obstacle: TunnelObstacle,
-) -> list[Mesh3D]:
-
-    return build_rotating_bar(
-        obstacle,
-        double=True,
-    )
-
-
 # ============================================================
 # BLADE GEOMETRY
 # ============================================================
 
-def create_blade_face(
-    *,
-    z: float,
-
-    angle: float,
-
-    width_degrees: float,
-
-    colour: tuple[int, int, int],
-) -> Face3D:
-
-    half_width = (
-        width_degrees
-        / 2.0
-    )
-
-    return Face3D(
-        vertices=[
-            Vec3(
-                0.0,
-                0.0,
-                z,
-            ),
-
-            tunnel_point(
-                angle
-                - half_width,
-
-                z,
-
-                radius=(
-                    TUNNEL_RADIUS
-                    * 1.02
-                ),
-            ),
-
-            tunnel_point(
-                angle
-                + half_width,
-
-                z,
-
-                radius=(
-                    TUNNEL_RADIUS
-                    * 1.02
-                ),
-            ),
-        ],
-
-        colour=colour,
-
-        outline_colour=WHITE,
-
-        outline_width=1,
-
-        double_sided=True,
-    )
-
-
 def build_blades(
     obstacle: TunnelObstacle,
-    blade_count: int,
+    count: int,
 ) -> list[Mesh3D]:
 
-    blade_count = max(
+    count = max(
         1,
-        blade_count,
+        count,
     )
 
     spacing = (
         360.0
-        / blade_count
+        / count
     )
 
     faces: list[
@@ -1235,32 +1124,65 @@ def build_blades(
     ] = []
 
     for index in range(
-        blade_count
+        count
     ):
+
+        angle = (
+            obstacle.current_angle()
+            + index
+            * spacing
+        )
+
+        half_width = min(
+            16.0,
+
+            spacing
+            * 0.20,
+        )
+
         faces.append(
-            create_blade_face(
-                z=obstacle.z,
+            Face3D(
+                vertices=[
+                    Vec3(
+                        0.0,
+                        0.0,
+                        obstacle.z,
+                    ),
 
-                angle=(
-                    obstacle.current_angle()
-                    + index
-                    * spacing
-                ),
+                    tunnel_point(
+                        angle
+                        - half_width,
 
-                width_degrees=min(
-                    32.0,
+                        obstacle.z,
 
-                    spacing
-                    * 0.42,
-                ),
+                        radius=TUNNEL_RADIUS,
+                    ),
+
+                    tunnel_point(
+                        angle
+                        + half_width,
+
+                        obstacle.z,
+
+                        radius=TUNNEL_RADIUS,
+                    ),
+                ],
 
                 colour=(
                     obstacle.primary_colour
 
-                    if index % 2 == 0
+                    if index
+                    % 2
+                    == 0
 
                     else obstacle.secondary_colour
                 ),
+
+                outline_colour=WHITE,
+
+                outline_width=1,
+
+                double_sided=True,
             )
         )
 
@@ -1297,6 +1219,7 @@ def build_triangles(
     for index in range(
         count
     ):
+
         angle = (
             obstacle.current_angle()
             + index
@@ -1337,7 +1260,9 @@ def build_triangles(
                 colour=(
                     obstacle.primary_colour
 
-                    if index % 2 == 0
+                    if index
+                    % 2
+                    == 0
 
                     else obstacle.secondary_colour
                 ),
@@ -1369,8 +1294,6 @@ def build_wedge(
         obstacle.current_angle()
     )
 
-    width = 110.0
-
     return [
         Mesh3D(
             faces=[
@@ -1383,8 +1306,7 @@ def build_wedge(
                         ),
 
                         tunnel_point(
-                            angle
-                            - width / 2.0,
+                            angle - 55.0,
 
                             obstacle.z,
 
@@ -1392,8 +1314,7 @@ def build_wedge(
                         ),
 
                         tunnel_point(
-                            angle
-                            + width / 2.0,
+                            angle + 55.0,
 
                             obstacle.z,
 
@@ -1407,7 +1328,7 @@ def build_wedge(
 
                     outline_colour=WHITE,
 
-                    outline_width=2,
+                    outline_width=1,
 
                     double_sided=True,
                 )
@@ -1424,12 +1345,8 @@ def build_diamond(
     obstacle: TunnelObstacle,
 ) -> list[Mesh3D]:
 
-    angle = (
-        obstacle.current_angle()
-    )
-
     center = tunnel_point(
-        angle,
+        obstacle.current_angle(),
 
         obstacle.z,
 
@@ -1439,7 +1356,7 @@ def build_diamond(
         ),
     )
 
-    size = 2.4
+    size = 2.3
 
     return [
         Mesh3D(
@@ -1477,7 +1394,7 @@ def build_diamond(
 
                     outline_colour=WHITE,
 
-                    outline_width=2,
+                    outline_width=1,
 
                     double_sided=True,
                 )
@@ -1498,39 +1415,30 @@ def build_finish_ring(
         Face3D
     ] = []
 
-    segments = 32
-
-    segment_angle = (
+    step = (
         360.0
-        / segments
+        / FINISH_RENDER_SEGMENTS
     )
 
     for index in range(
-        segments
+        FINISH_RENDER_SEGMENTS
     ):
-        a0 = (
+
+        start_angle = (
             index
-            * segment_angle
+            * step
         )
 
-        a1 = (
-            a0
-            + segment_angle
-        )
-
-        colour = (
-            CYAN
-
-            if index % 2 == 0
-
-            else WHITE
+        end_angle = (
+            start_angle
+            + step
         )
 
         faces.append(
             Face3D(
                 vertices=[
                     tunnel_point(
-                        a0,
+                        start_angle,
 
                         obstacle.z,
 
@@ -1541,7 +1449,7 @@ def build_finish_ring(
                     ),
 
                     tunnel_point(
-                        a0,
+                        start_angle,
 
                         obstacle.z,
 
@@ -1552,7 +1460,7 @@ def build_finish_ring(
                     ),
 
                     tunnel_point(
-                        a1,
+                        end_angle,
 
                         obstacle.z,
 
@@ -1563,7 +1471,7 @@ def build_finish_ring(
                     ),
 
                     tunnel_point(
-                        a1,
+                        end_angle,
 
                         obstacle.z,
 
@@ -1574,11 +1482,21 @@ def build_finish_ring(
                     ),
                 ],
 
-                colour=colour,
+                colour=(
+                    CYAN
+
+                    if index
+                    % 2
+                    == 0
+
+                    else WHITE
+                ),
+
+                outline_colour=None,
+
+                outline_width=0,
 
                 double_sided=True,
-
-                glow=False,
             )
         )
 
@@ -1590,7 +1508,7 @@ def build_finish_ring(
 
 
 # ============================================================
-# MESH BUILDER
+# MESH ROUTER
 # ============================================================
 
 def build_obstacle_meshes(
@@ -1609,8 +1527,9 @@ def build_obstacle_meshes(
         OBSTACLE_CLOSING_WALL,
         OBSTACLE_MOVING_GAP,
     ):
+
         return [
-            create_thick_wall_mesh(
+            create_wall_mesh(
                 obstacle
             )
         ]
@@ -1619,35 +1538,31 @@ def build_obstacle_meshes(
         obstacle_type
         == OBSTACLE_ROTATING_BAR
     ):
-        return build_rotating_bar(
+
+        return build_bar(
             obstacle,
 
             double=False,
         )
 
-    if (
-        obstacle_type
-        == OBSTACLE_DOUBLE_BAR
-    ):
-        return build_rotating_bar(
-            obstacle,
-
-            double=True,
-        )
-
     if obstacle_type in (
+        OBSTACLE_DOUBLE_BAR,
         OBSTACLE_CROSS,
         OBSTACLE_ROTATING_CROSS,
         OBSTACLE_SPINNER,
     ):
-        return build_cross(
-            obstacle
+
+        return build_bar(
+            obstacle,
+
+            double=True,
         )
 
     if (
         obstacle_type
         == OBSTACLE_TRIANGLE
     ):
+
         return build_triangles(
             obstacle,
             1,
@@ -1657,6 +1572,7 @@ def build_obstacle_meshes(
         obstacle_type
         == OBSTACLE_DOUBLE_TRIANGLE
     ):
+
         return build_triangles(
             obstacle,
             2,
@@ -1666,6 +1582,7 @@ def build_obstacle_meshes(
         OBSTACLE_WEDGE,
         OBSTACLE_ROTATING_WEDGE,
     ):
+
         return build_wedge(
             obstacle
         )
@@ -1674,6 +1591,7 @@ def build_obstacle_meshes(
         obstacle_type
         == OBSTACLE_DIAMOND
     ):
+
         return build_diamond(
             obstacle
         )
@@ -1682,6 +1600,7 @@ def build_obstacle_meshes(
         obstacle_type
         == OBSTACLE_BLADE
     ):
+
         return build_blades(
             obstacle,
             1,
@@ -1691,6 +1610,7 @@ def build_obstacle_meshes(
         obstacle_type
         == OBSTACLE_DOUBLE_BLADE
     ):
+
         return build_blades(
             obstacle,
             2,
@@ -1700,6 +1620,7 @@ def build_obstacle_meshes(
         obstacle_type
         == OBSTACLE_TRIPLE_BLADE
     ):
+
         return build_blades(
             obstacle,
             3,
@@ -1709,6 +1630,7 @@ def build_obstacle_meshes(
         obstacle_type
         == OBSTACLE_FINISH
     ):
+
         return build_finish_ring(
             obstacle
         )
@@ -1745,34 +1667,25 @@ def create_obstacle(
 
         safe_width=safe_width,
 
-        rotation_speed=(
-            rotation_speed
-        ),
+        rotation_speed=rotation_speed,
 
-        movement_speed=(
-            movement_speed
-        ),
+        movement_speed=movement_speed,
 
-        movement_amount=(
-            movement_amount
-        ),
+        movement_amount=movement_amount,
 
         phase=phase,
 
         thickness=thickness,
 
-        primary_colour=(
-            primary_colour
-        ),
+        primary_colour=primary_colour,
 
-        secondary_colour=(
-            secondary_colour
-        ),
+        secondary_colour=secondary_colour,
 
         metadata=(
             metadata
 
-            if metadata is not None
+            if metadata
+            is not None
 
             else {}
         ),
@@ -1784,6 +1697,7 @@ def create_obstacle(
         OBSTACLE_RING_GAP,
         OBSTACLE_SLIDING_WALL,
     ):
+
         return WallObstacle(
             **common
         )
@@ -1792,6 +1706,7 @@ def create_obstacle(
         obstacle_type
         == OBSTACLE_MOVING_GAP
     ):
+
         return MovingGapObstacle(
             **common
         )
@@ -1800,6 +1715,7 @@ def create_obstacle(
         obstacle_type
         == OBSTACLE_CLOSING_WALL
     ):
+
         return ClosingWallObstacle(
             **common
         )
@@ -1808,6 +1724,7 @@ def create_obstacle(
         obstacle_type
         == OBSTACLE_ROTATING_BAR
     ):
+
         common[
             "safe_width"
         ] = max(
@@ -1826,6 +1743,7 @@ def create_obstacle(
         OBSTACLE_ROTATING_CROSS,
         OBSTACLE_SPINNER,
     ):
+
         common[
             "safe_width"
         ] = max(
@@ -1843,25 +1761,28 @@ def create_obstacle(
         OBSTACLE_DOUBLE_BLADE,
         OBSTACLE_TRIPLE_BLADE,
     ):
-        result = (
-            BladeObstacle(
-                **common
-            )
+
+        result = BladeObstacle(
+            **common
         )
 
-        result.blade_count = (
-            1
-
-            if obstacle_type
+        if (
+            obstacle_type
             == OBSTACLE_BLADE
+        ):
 
-            else 2
+            result.blade_count = 1
 
-            if obstacle_type
+        elif (
+            obstacle_type
             == OBSTACLE_DOUBLE_BLADE
+        ):
 
-            else 3
-        )
+            result.blade_count = 2
+
+        else:
+
+            result.blade_count = 3
 
         return result
 
@@ -1872,10 +1793,9 @@ def create_obstacle(
         OBSTACLE_ROTATING_WEDGE,
         OBSTACLE_DIAMOND,
     ):
-        result = (
-            TriangleObstacle(
-                **common
-            )
+
+        result = TriangleObstacle(
+            **common
         )
 
         result.triangle_count = (
@@ -1893,6 +1813,7 @@ def create_obstacle(
         obstacle_type
         == OBSTACLE_FINISH
     ):
+
         return FinishObstacle(
             **common
         )
@@ -1923,16 +1844,15 @@ def make_gap_wall(
 
         safe_width=max(
             MIN_PLAYABLE_GAP,
+
             safe_width,
         ),
 
         primary_colour=colour,
 
-        secondary_colour=(
-            safe_colour(
-                colour,
-                0.72,
-            )
+        secondary_colour=safe_colour(
+            colour,
+            0.72,
         ),
     )
 
@@ -1951,13 +1871,9 @@ def make_rotating_bar(
 
         angle=angle,
 
-        safe_width=(
-            MIN_BAR_GAP
-        ),
+        safe_width=MIN_BAR_GAP,
 
-        rotation_speed=(
-            rotation_speed
-        ),
+        rotation_speed=rotation_speed,
 
         primary_colour=ORANGE,
 
@@ -1981,9 +1897,7 @@ def make_rotating_cross(
 
         safe_width=70.0,
 
-        rotation_speed=(
-            rotation_speed
-        ),
+        rotation_speed=rotation_speed,
 
         primary_colour=RED,
 
@@ -2007,9 +1921,7 @@ def make_spinner(
 
         safe_width=72.0,
 
-        rotation_speed=(
-            rotation_speed
-        ),
+        rotation_speed=rotation_speed,
 
         primary_colour=PINK,
 
@@ -2035,16 +1947,13 @@ def make_moving_gap(
 
         safe_width=max(
             62.0,
+
             safe_width,
         ),
 
-        movement_amount=(
-            movement_amount
-        ),
+        movement_amount=movement_amount,
 
-        movement_speed=(
-            movement_speed
-        ),
+        movement_speed=movement_speed,
 
         primary_colour=RED,
 
@@ -2069,12 +1978,11 @@ def make_closing_wall(
 
         safe_width=max(
             72.0,
+
             safe_width,
         ),
 
-        movement_speed=(
-            movement_speed
-        ),
+        movement_speed=movement_speed,
 
         primary_colour=ORANGE,
 
@@ -2090,17 +1998,23 @@ def make_blades(
     rotation_speed: float = 48.0,
 ) -> TunnelObstacle:
 
-    obstacle_type = (
-        OBSTACLE_BLADE
+    if count <= 1:
 
-        if count <= 1
+        obstacle_type = (
+            OBSTACLE_BLADE
+        )
 
-        else OBSTACLE_DOUBLE_BLADE
+    elif count == 2:
 
-        if count == 2
+        obstacle_type = (
+            OBSTACLE_DOUBLE_BLADE
+        )
 
-        else OBSTACLE_TRIPLE_BLADE
-    )
+    else:
+
+        obstacle_type = (
+            OBSTACLE_TRIPLE_BLADE
+        )
 
     return create_obstacle(
         obstacle_type,
@@ -2109,13 +2023,9 @@ def make_blades(
 
         angle=angle,
 
-        safe_width=(
-            MIN_PLAYABLE_GAP
-        ),
+        safe_width=MIN_PLAYABLE_GAP,
 
-        rotation_speed=(
-            rotation_speed
-        ),
+        rotation_speed=rotation_speed,
 
         primary_colour=RED,
 
@@ -2132,8 +2042,6 @@ def make_finish(
 
         z=z,
 
-        angle=0.0,
-
         safe_width=360.0,
 
         primary_colour=CYAN,
@@ -2147,9 +2055,11 @@ def make_finish(
 # ============================================================
 
 class ObstacleManager:
+
     def __init__(
         self,
     ):
+
         self.obstacles: list[
             TunnelObstacle
         ] = []
@@ -2163,6 +2073,7 @@ class ObstacleManager:
     def clear(
         self,
     ) -> None:
+
         self.obstacles.clear()
 
         self.total_passed = 0
@@ -2175,14 +2086,14 @@ class ObstacleManager:
         self,
         obstacle: TunnelObstacle,
     ) -> None:
+
         self.obstacles.append(
             obstacle
         )
 
         self.obstacles.sort(
-            key=lambda item: (
-                item.z
-            )
+            key=lambda item:
+            item.z
         )
 
     def extend(
@@ -2191,18 +2102,18 @@ class ObstacleManager:
             TunnelObstacle
         ],
     ) -> None:
+
         self.obstacles.extend(
             obstacles
         )
 
         self.obstacles.sort(
-            key=lambda item: (
-                item.z
-            )
+            key=lambda item:
+            item.z
         )
 
     # ========================================================
-    # UPDATE
+    # OPTIMIZED UPDATE
     # ========================================================
 
     def update(
@@ -2210,26 +2121,82 @@ class ObstacleManager:
         delta_time: float,
         camera_z: float,
     ) -> None:
+
+        maximum_z = (
+            camera_z
+            + ANIMATION_DISTANCE
+        )
+
         for obstacle in (
             self.obstacles
         ):
-            obstacle.update(
-                delta_time
-            )
+
+            if obstacle.state.passed:
+                continue
+
+            # -----------------------------------------------
+            # ALREADY BEHIND PLAYER
+            # -----------------------------------------------
 
             if (
-                obstacle.update_passed_state(
-                    camera_z
-                )
+                obstacle.z
+                < camera_z
+                - 4.0
             ):
+
+                if obstacle.update_passed_state(
+                    camera_z
+                ):
+
+                    if (
+                        obstacle.obstacle_type
+                        != OBSTACLE_FINISH
+                    ):
+
+                        self.total_passed += 1
+
+                continue
+
+            # -----------------------------------------------
+            # TOO FAR AWAY
+            # -----------------------------------------------
+            #
+            # The list is sorted by Z.
+            #
+            # Therefore everything after this obstacle is
+            # even farther away.
+            #
+
+            if (
+                obstacle.z
+                > maximum_z
+            ):
+
+                break
+
+            # -----------------------------------------------
+            # ONLY UPDATE MOVING OBSTACLES
+            # -----------------------------------------------
+
+            if obstacle.animated:
+
+                obstacle.update(
+                    delta_time
+                )
+
+            if obstacle.update_passed_state(
+                camera_z
+            ):
+
                 if (
                     obstacle.obstacle_type
                     != OBSTACLE_FINISH
                 ):
+
                     self.total_passed += 1
 
     # ========================================================
-    # COLLISION
+    # OPTIMIZED COLLISION
     # ========================================================
 
     def check_collision(
@@ -2238,17 +2205,15 @@ class ObstacleManager:
         player_angle: float,
     ) -> TunnelObstacle | None:
 
-        # Obstacles are sorted by Z, so there is no reason to
-        # collision-test the entire level every frame.
-
         for obstacle in (
             self.obstacles
         ):
+
             if (
                 obstacle.state.passed
-
                 or not obstacle.enabled
             ):
+
                 continue
 
             distance = (
@@ -2256,24 +2221,29 @@ class ObstacleManager:
                 - camera_z
             )
 
+            # Sorted list.
+            #
+            # Nothing after this can collide yet.
+
             if (
                 distance
-                > 3.0
+                > COLLISION_SEARCH_DISTANCE
             ):
+
                 break
 
             if (
                 distance
-                < -3.0
+                < -COLLISION_SEARCH_DISTANCE
             ):
+
                 continue
 
-            if (
-                obstacle.check_collision(
-                    camera_z,
-                    player_angle,
-                )
+            if obstacle.check_collision(
+                camera_z,
+                player_angle,
             ):
+
                 return obstacle
 
         return None
@@ -2290,10 +2260,12 @@ class ObstacleManager:
         for obstacle in reversed(
             self.obstacles
         ):
+
             if (
                 obstacle.obstacle_type
                 == OBSTACLE_FINISH
             ):
+
                 return (
                     camera_z
                     >= obstacle.z
@@ -2302,7 +2274,7 @@ class ObstacleManager:
         return False
 
     # ========================================================
-    # VISIBLE
+    # VISIBLE OBSTACLES
     # ========================================================
 
     def visible_obstacles(
@@ -2313,40 +2285,44 @@ class ObstacleManager:
         TunnelObstacle
     ]:
 
-        result: list[
-            TunnelObstacle
-        ] = []
-
         maximum_z = (
             camera_z
             + visible_distance
         )
 
+        visible: list[
+            TunnelObstacle
+        ] = []
+
         for obstacle in (
             self.obstacles
         ):
+
             if (
                 obstacle.z
                 < camera_z
                 - 2.0
             ):
+
                 continue
 
             if (
                 obstacle.z
                 > maximum_z
             ):
+
                 break
 
             if obstacle.enabled:
-                result.append(
+
+                visible.append(
                     obstacle
                 )
 
-        return result
+        return visible
 
     # ========================================================
-    # MESHES
+    # BUILD VISIBLE MESHES
     # ========================================================
 
     def build_visible_meshes(
@@ -2367,6 +2343,7 @@ class ObstacleManager:
                 visible_distance,
             )
         ):
+
             meshes.extend(
                 obstacle.build_meshes()
             )
@@ -2381,7 +2358,7 @@ class ObstacleManager:
         self,
         camera_z: float,
         *,
-        margin: float = 30.0,
+        margin: float = 25.0,
     ) -> None:
 
         self.obstacles = [
@@ -2409,6 +2386,7 @@ class ObstacleManager:
         for obstacle in (
             self.obstacles
         ):
+
             if (
                 obstacle.enabled
 
@@ -2417,13 +2395,14 @@ class ObstacleManager:
                 and obstacle.z
                 >= camera_z
             ):
+
                 return obstacle
 
         return None
 
 
 # ============================================================
-# ENDLESS RANDOM OBSTACLE
+# ENDLESS OBSTACLE GENERATOR
 # ============================================================
 
 def create_random_endless_obstacle(
@@ -2435,6 +2414,7 @@ def create_random_endless_obstacle(
 ) -> TunnelObstacle:
 
     if rng is None:
+
         rng = random.Random()
 
     difficulty = max(
@@ -2442,13 +2422,19 @@ def create_random_endless_obstacle(
         difficulty,
     )
 
+    # ========================================================
+    # ANGLE
+    # ========================================================
+
     if previous_angle is None:
+
         angle = rng.uniform(
             0.0,
             360.0,
         )
 
     else:
+
         maximum_change = clamp(
             70.0
             + difficulty
@@ -2467,6 +2453,10 @@ def create_random_endless_obstacle(
             )
         )
 
+    # ========================================================
+    # SAFE GAP
+    # ========================================================
+
     safe_width = clamp(
         110.0
         - difficulty
@@ -2476,6 +2466,10 @@ def create_random_endless_obstacle(
 
         110.0,
     )
+
+    # ========================================================
+    # DIFFICULTY POOL
+    # ========================================================
 
     choices = [
         OBSTACLE_GAP_WALL,
@@ -2487,6 +2481,7 @@ def create_random_endless_obstacle(
         difficulty
         >= 0.8
     ):
+
         choices.extend(
             [
                 OBSTACLE_ROTATING_BAR,
@@ -2498,6 +2493,7 @@ def create_random_endless_obstacle(
         difficulty
         >= 1.8
     ):
+
         choices.extend(
             [
                 OBSTACLE_ROTATING_CROSS,
@@ -2510,6 +2506,7 @@ def create_random_endless_obstacle(
         difficulty
         >= 3.0
     ):
+
         choices.extend(
             [
                 OBSTACLE_SPINNER,
@@ -2520,8 +2517,9 @@ def create_random_endless_obstacle(
 
     if (
         difficulty
-        >= 4.8
+        >= 5.0
     ):
+
         choices.extend(
             [
                 OBSTACLE_TRIPLE_BLADE,
@@ -2534,6 +2532,10 @@ def create_random_endless_obstacle(
             choices
         )
     )
+
+    # ========================================================
+    # ROTATION
+    # ========================================================
 
     rotation_speed = 0.0
 
@@ -2569,6 +2571,10 @@ def create_random_endless_obstacle(
             )
         )
 
+    # ========================================================
+    # MOVING GAP
+    # ========================================================
+
     if (
         obstacle_type
         == OBSTACLE_MOVING_GAP
@@ -2594,6 +2600,10 @@ def create_random_endless_obstacle(
             88.0,
         )
 
+    # ========================================================
+    # CLOSING WALL
+    # ========================================================
+
     if (
         obstacle_type
         == OBSTACLE_CLOSING_WALL
@@ -2609,6 +2619,10 @@ def create_random_endless_obstacle(
             1.3,
         )
 
+    # ========================================================
+    # CREATE
+    # ========================================================
+
     return create_obstacle(
         obstacle_type,
 
@@ -2618,17 +2632,11 @@ def create_random_endless_obstacle(
 
         safe_width=safe_width,
 
-        rotation_speed=(
-            rotation_speed
-        ),
+        rotation_speed=rotation_speed,
 
-        movement_speed=(
-            movement_speed
-        ),
+        movement_speed=movement_speed,
 
-        movement_amount=(
-            movement_amount
-        ),
+        movement_amount=movement_amount,
 
         phase=rng.uniform(
             0.0,
@@ -2637,23 +2645,19 @@ def create_random_endless_obstacle(
 
         thickness=0.8,
 
-        primary_colour=(
-            rng.choice(
-                (
-                    RED,
-                    ORANGE,
-                    PINK,
-                )
+        primary_colour=rng.choice(
+            (
+                RED,
+                ORANGE,
+                PINK,
             )
         ),
 
-        secondary_colour=(
-            rng.choice(
-                (
-                    ORANGE,
-                    YELLOW,
-                    CYAN,
-                )
+        secondary_colour=rng.choice(
+            (
+                ORANGE,
+                YELLOW,
+                CYAN,
             )
         ),
     )
@@ -2666,6 +2670,10 @@ def create_random_endless_obstacle(
 def validate_obstacle_system(
 ) -> None:
 
+    # ========================================================
+    # GAP WALL
+    # ========================================================
+
     wall = create_obstacle(
         OBSTACLE_GAP_WALL,
 
@@ -2676,23 +2684,25 @@ def validate_obstacle_system(
         safe_width=90.0,
     )
 
-    if not (
-        wall.player_is_safe(
-            0.0
-        )
+    if not wall.player_is_safe(
+        0.0
     ):
+
         raise ValueError(
-            "Gap-wall safe-zone validation failed."
+            "Gap wall safe-zone validation failed."
         )
 
-    if (
-        wall.player_is_safe(
-            180.0
-        )
+    if wall.player_is_safe(
+        180.0
     ):
+
         raise ValueError(
-            "Gap-wall collision validation failed."
+            "Gap wall collision validation failed."
         )
+
+    # ========================================================
+    # ROTATING BAR
+    # ========================================================
 
     bar = create_obstacle(
         OBSTACLE_ROTATING_BAR,
@@ -2704,27 +2714,25 @@ def validate_obstacle_system(
         rotation_speed=0.0,
     )
 
-    # Horizontal bar:
-    # bottom/top safe.
-    # left/right blocked.
-
-    if not (
-        bar.player_is_safe(
-            0.0
-        )
+    if not bar.player_is_safe(
+        0.0
     ):
+
         raise ValueError(
-            "Rotating-bar collision does not match visible geometry."
+            "Rotating bar safe opening validation failed."
         )
 
-    if (
-        bar.player_is_safe(
-            90.0
-        )
+    if bar.player_is_safe(
+        90.0
     ):
+
         raise ValueError(
-            "Rotating-bar blocked side is incorrectly safe."
+            "Rotating bar collision validation failed."
         )
+
+    # ========================================================
+    # SPINNER
+    # ========================================================
 
     spinner = create_obstacle(
         OBSTACLE_SPINNER,
@@ -2736,31 +2744,36 @@ def validate_obstacle_system(
         rotation_speed=0.0,
     )
 
-    if not (
-        spinner.player_is_safe(
-            45.0
-        )
+    if not spinner.player_is_safe(
+        45.0
     ):
+
         raise ValueError(
-            "Spinner should have a usable visible opening."
+            "Spinner opening validation failed."
         )
+
+    # ========================================================
+    # FINISH
+    # ========================================================
 
     finish = make_finish(
         500.0
     )
 
-    if not (
-        finish.player_is_safe(
-            180.0
-        )
+    if not finish.player_is_safe(
+        180.0
     ):
+
         raise ValueError(
             "Finish must always be safe."
         )
 
-    if not (
-        wall.build_meshes()
-    ):
+    # ========================================================
+    # MESH
+    # ========================================================
+
+    if not wall.build_meshes():
+
         raise ValueError(
             "Obstacle mesh generation failed."
         )

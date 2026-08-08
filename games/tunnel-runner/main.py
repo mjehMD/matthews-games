@@ -77,6 +77,7 @@ from config import (
     WHITE,
     WINDOW_TITLE,
     YELLOW,
+    GAME_SPEED_MULTIPLIER, 
     clamp,
     format_distance,
     format_version,
@@ -2802,6 +2803,7 @@ class TunnelRunnerGame:
                 endless_speed_at_distance(
                     distance
                 )
+                * GAME_SPEED_MULTIPLIER
             )
 
             self.endless_generator.update(
@@ -2815,6 +2817,7 @@ class TunnelRunnerGame:
                     self.selected_level_number,
                     distance,
                 )
+                * GAME_SPEED_MULTIPLIER
             )
 
         self.maximum_speed_this_run = max(

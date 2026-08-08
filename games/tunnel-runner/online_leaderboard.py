@@ -1327,7 +1327,7 @@ def validate_leaderboard_config(
 
     if not LEADERBOARD_GAME_NAME:
         raise ValueError(
-            "LEADERBOARD_GAME_NAME is empty."
+            LEADERBOARD_GAME_NAME = "tunnel-runner"
         )
 
     if MAX_LEADERBOARD_ENTRIES <= 0:

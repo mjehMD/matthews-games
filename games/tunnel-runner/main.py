@@ -5,7 +5,7 @@ import gc
 import math
 import random
 import sys
-from typing import Any
+from typing import Any, Callable
 
 import pygame
 
@@ -17,8 +17,6 @@ from config import (
     BUTTON_CORNER_RADIUS,
     BUTTON_HEIGHT,
     BUTTON_WIDTH,
-    CAMERA_SHAKE_AMOUNT,
-    CAMERA_SHAKE_DURATION,
     CYAN,
     FPS,
     GAME_CENTER_X,
@@ -84,12 +82,25 @@ from config import (
 )
 
 from geometry import (
+    ENVIRONMENT_INSIDE,
+    ENVIRONMENT_OUTSIDE,
+    ENVIRONMENT_TRANSITION,
     Camera3D,
+    Face3D,
     Mesh3D,
     SceneRenderer3D,
     Vec2,
     Vec3,
+    campaign_environment_at_progress,
+    campaign_environment_for_level,
+    campaign_supports_environment_switch,
+    create_environment_transition_meshes,
+    create_outside_tunnel_section_mesh,
     create_tunnel_section_mesh,
+    endless_environment_for_distance,
+    endless_transition_information,
+    multiply_colour,
+    tunnel_point,
 )
 
 from obstacles import (
@@ -134,9 +145,8 @@ from online_leaderboard import (
 
 # ============================================================
 # TUNNEL RUNNER
-# MAIN
-# VERSION 0.1.3
-# PERFORMANCE BUILD
+# MAIN GAME
+# VERSION 0.2.0
 # ============================================================
 
 
@@ -152,9 +162,6 @@ IS_WEB = sys.platform in (
 
 TARGET_FPS = 60
 
-# Only the 3D world is rendered smaller.
-# Text/HUD/menu stay full resolution.
-
 WORLD_SCALE_HIGH = 0.66
 WORLD_SCALE_MEDIUM = 0.56
 WORLD_SCALE_LOW = 0.48
@@ -162,20 +169,15 @@ WORLD_SCALE_LOW = 0.48
 AUTO_QUALITY = True
 
 FPS_CHECK_SECONDS = 2.0
-
 FPS_DROP_THRESHOLD = 56.0
 FPS_RECOVER_THRESHOLD = 59.0
-
 QUALITY_RECOVER_SECONDS = 8.0
-
-
-# Tunnel detail.
 
 PERFORMANCE_TUNNEL_SEGMENTS = max(
     10,
     min(
         TUNNEL_SEGMENTS,
-        10,
+        12,
     ),
 )
 
@@ -195,14 +197,34 @@ OBSTACLE_RENDER_DISTANCE = (
 )
 
 TUNNEL_CACHE_REMOVE_BEHIND = 16.0
-
-TUNNEL_CACHE_EXTRA_AHEAD = 18.0
-
-TUNNEL_CACHE_MAX_CHUNKS = 32
+TUNNEL_CACHE_EXTRA_AHEAD = 22.0
+TUNNEL_CACHE_MAX_CHUNKS = 34
 
 
 # ============================================================
-# DRAW HELPERS
+# ENVIRONMENT
+# ============================================================
+
+ENDLESS_ENVIRONMENT_LENGTH = 1000.0
+
+ENDLESS_TRANSITION_LENGTH = 120.0
+
+CAMPAIGN_TRANSITION_LENGTH = 90.0
+
+OUTSIDE_TUBE_RADIUS = (
+    TUNNEL_RADIUS
+)
+
+OUTSIDE_HAZARD_RADIUS = (
+    TUNNEL_RADIUS
+    * 1.065
+)
+
+OUTSIDE_HAZARD_SEGMENTS = 24
+
+
+# ============================================================
+# UI HELPERS
 # ============================================================
 
 def draw_text(
@@ -318,9 +340,9 @@ def draw_progress_bar(
     pygame.draw.rect(
         surface,
         (
-            20,
-            24,
-            36,
+            18,
+            23,
+            38,
         ),
         rect,
         border_radius=8,
@@ -331,7 +353,7 @@ def draw_progress_bar(
         -4,
     )
 
-    if progress > 0.0:
+    if progress > 0:
 
         filled = inner.copy()
 
@@ -368,8 +390,8 @@ class Button:
     def __init__(
         self,
         rect,
-        text: str,
-        font: pygame.font.Font,
+        text,
+        font,
         *,
         accent=CYAN,
         enabled=True,
@@ -380,13 +402,9 @@ class Button:
         )
 
         self.text = text
-
         self.font = font
-
         self.accent = accent
-
         self.enabled = enabled
-
         self.hovered = False
 
     def update(
@@ -555,7 +573,9 @@ class CrashParticle:
         delta_time,
     ):
 
-        self.life -= delta_time
+        self.life -= (
+            delta_time
+        )
 
         self.position += (
             self.velocity
@@ -581,7 +601,7 @@ class CrashParticle:
 
 
 # ============================================================
-# TUNNEL CACHE
+# TUNNEL CACHE CHUNK
 # ============================================================
 
 class TunnelCacheChunk:
@@ -590,13 +610,19 @@ class TunnelCacheChunk:
         self,
         start_z: float,
         end_z: float,
+        environment: str,
         mesh: Mesh3D,
     ):
 
         self.start_z = start_z
         self.end_z = end_z
+        self.environment = environment
         self.mesh = mesh
 
+
+# ============================================================
+# TUNNEL CACHE
+# ============================================================
 
 class TunnelMeshCache:
 
@@ -611,6 +637,8 @@ class TunnelMeshCache:
         self.next_z = 0.0
 
         self.theme_name = ""
+
+        self.environment_version = 0
 
     def clear(
         self,
@@ -653,46 +681,86 @@ class TunnelMeshCache:
         start_z,
         end_z,
         theme_name,
+        environment,
     ):
 
         theme = get_theme(
             theme_name
         )
 
-        mesh = (
-            create_tunnel_section_mesh(
-                start_z,
-                end_z,
+        if (
+            environment
+            == ENVIRONMENT_OUTSIDE
+        ):
 
-                radius=TUNNEL_RADIUS,
+            mesh = (
+                create_outside_tunnel_section_mesh(
+                    start_z,
+                    end_z,
 
-                segments=(
-                    PERFORMANCE_TUNNEL_SEGMENTS
-                ),
+                    radius=(
+                        OUTSIDE_TUBE_RADIUS
+                    ),
 
-                start_rotation=0.0,
+                    segments=(
+                        PERFORMANCE_TUNNEL_SEGMENTS
+                    ),
 
-                end_rotation=0.0,
+                    start_rotation=0.0,
+                    end_rotation=0.0,
 
-                primary_colour=(
-                    theme.tunnel_primary
-                ),
+                    primary_colour=(
+                        theme.tunnel_primary
+                    ),
 
-                secondary_colour=(
-                    theme.tunnel_secondary
-                ),
+                    secondary_colour=(
+                        theme.tunnel_secondary
+                    ),
 
-                line_colour=(
-                    theme.tunnel_lines
-                ),
+                    line_colour=(
+                        theme.tunnel_lines
+                    ),
 
-                draw_outlines=False,
+                    draw_outlines=False,
+                )
             )
-        )
+
+        else:
+
+            mesh = (
+                create_tunnel_section_mesh(
+                    start_z,
+                    end_z,
+
+                    radius=TUNNEL_RADIUS,
+
+                    segments=(
+                        PERFORMANCE_TUNNEL_SEGMENTS
+                    ),
+
+                    start_rotation=0.0,
+                    end_rotation=0.0,
+
+                    primary_colour=(
+                        theme.tunnel_primary
+                    ),
+
+                    secondary_colour=(
+                        theme.tunnel_secondary
+                    ),
+
+                    line_colour=(
+                        theme.tunnel_lines
+                    ),
+
+                    draw_outlines=False,
+                )
+            )
 
         return TunnelCacheChunk(
             start_z,
             end_z,
+            environment,
             mesh,
         )
 
@@ -700,6 +768,10 @@ class TunnelMeshCache:
         self,
         camera_z,
         theme_name,
+        environment_resolver: Callable[
+            [float],
+            str,
+        ],
     ):
 
         if (
@@ -758,11 +830,44 @@ class TunnelMeshCache:
                 + section
             )
 
+            midpoint = (
+                start_z
+                + end_z
+            ) / 2.0
+
+            environment = (
+                environment_resolver(
+                    midpoint
+                )
+            )
+
+            if (
+                environment
+                == ENVIRONMENT_TRANSITION
+            ):
+
+                environment = (
+                    environment_resolver(
+                        end_z
+                        + 1.0
+                    )
+                )
+
+                if (
+                    environment
+                    == ENVIRONMENT_TRANSITION
+                ):
+
+                    environment = (
+                        ENVIRONMENT_INSIDE
+                    )
+
             self.chunks.append(
                 self._create_chunk(
                     start_z,
                     end_z,
                     theme_name,
+                    environment,
                 )
             )
 
@@ -824,6 +929,7 @@ class TunnelRunnerGame:
         )
 
         if not ALLOW_FULLSCREEN:
+
             self.fullscreen = False
 
         self.display_surface = (
@@ -854,9 +960,7 @@ class TunnelRunnerGame:
 
         self._recalculate_display()
 
-        self.clock = (
-            pygame.time.Clock()
-        )
+        self.clock = pygame.time.Clock()
 
         # ====================================================
         # FONTS
@@ -906,7 +1010,7 @@ class TunnelRunnerGame:
         )
 
         # ====================================================
-        # LOW RES 3D
+        # 3D
         # ====================================================
 
         self.quality_level = 0
@@ -936,6 +1040,32 @@ class TunnelRunnerGame:
         )
 
         # ====================================================
+        # ENVIRONMENT
+        # ====================================================
+
+        self.current_environment = (
+            ENVIRONMENT_INSIDE
+        )
+
+        self.previous_environment = (
+            ENVIRONMENT_INSIDE
+        )
+
+        self.transition_active = False
+
+        self.transition_progress = 0.0
+
+        self.transition_from = (
+            ENVIRONMENT_INSIDE
+        )
+
+        self.transition_to = (
+            ENVIRONMENT_INSIDE
+        )
+
+        self.last_environment_label = ""
+
+        # ====================================================
         # ACCOUNT
         # ====================================================
 
@@ -946,16 +1076,12 @@ class TunnelRunnerGame:
         self.session_manager.begin_loading()
 
         # ====================================================
-        # STATE
+        # GAME STATE
         # ====================================================
 
-        self.state = (
-            STATE_LOADING
-        )
+        self.state = STATE_LOADING
 
-        self.game_mode = (
-            MODE_LEVELS
-        )
+        self.game_mode = MODE_LEVELS
 
         self.selected_level_number = 1
 
@@ -993,10 +1119,6 @@ class TunnelRunnerGame:
 
         self.last_crash_obstacle = ""
 
-        # ====================================================
-        # FREEZE SCREEN
-        # ====================================================
-
         self.frozen_game_frame = None
 
         # ====================================================
@@ -1008,13 +1130,10 @@ class TunnelRunnerGame:
         self.performance_stable_timer = 0.0
 
         # ====================================================
-        # PARTICLES
+        # EFFECTS
         # ====================================================
 
         self.crash_particles = []
-
-        self.shake_time = 0.0
-        self.shake_strength = 0.0
 
         # ====================================================
         # ONLINE
@@ -1022,7 +1141,9 @@ class TunnelRunnerGame:
 
         self.online_personal_best = 0
 
-        self.leaderboard = []
+        self.leaderboard: list[
+            dict[str, Any]
+        ] = []
 
         self.leaderboard_message = (
             "Leaderboard not loaded."
@@ -1086,13 +1207,11 @@ class TunnelRunnerGame:
 
         self._build_buttons()
 
-        # We control garbage collection ourselves at safe times.
-
         gc.collect()
         gc.disable()
 
     # ========================================================
-    # WORLD RENDERER
+    # LOW RES RENDERER
     # ========================================================
 
     def _rebuild_world_renderer(
@@ -1101,13 +1220,15 @@ class TunnelRunnerGame:
     ):
 
         old_position = (
-            self.camera.position
+            self.camera.position.copy()
+
             if self.camera
             else Vec3()
         )
 
         old_rotation = (
-            self.camera.rotation
+            self.camera.rotation.copy()
+
             if self.camera
             else Vec3()
         )
@@ -1160,6 +1281,9 @@ class TunnelRunnerGame:
             )
         )
 
+        self.renderer.fog_start = 52.0
+        self.renderer.fog_end = 280.0
+
     # ========================================================
     # AUTO QUALITY
     # ========================================================
@@ -1170,12 +1294,14 @@ class TunnelRunnerGame:
     ):
 
         if not AUTO_QUALITY:
+
             return
 
         if (
             self.state
             != STATE_PLAYING
         ):
+
             return
 
         self.performance_timer += (
@@ -1190,15 +1316,15 @@ class TunnelRunnerGame:
             self.performance_timer
             < FPS_CHECK_SECONDS
         ):
+
             return
 
         self.performance_timer = 0.0
 
-        fps = (
-            self.clock.get_fps()
-        )
+        fps = self.clock.get_fps()
 
         if fps <= 1:
+
             return
 
         if (
@@ -1208,10 +1334,7 @@ class TunnelRunnerGame:
 
             self.performance_stable_timer = 0.0
 
-            if (
-                self.quality_level
-                == 0
-            ):
+            if self.quality_level == 0:
 
                 self.quality_level = 1
 
@@ -1219,10 +1342,7 @@ class TunnelRunnerGame:
                     WORLD_SCALE_MEDIUM
                 )
 
-            elif (
-                self.quality_level
-                == 1
-            ):
+            elif self.quality_level == 1:
 
                 self.quality_level = 2
 
@@ -1235,14 +1355,12 @@ class TunnelRunnerGame:
         if (
             fps
             >= FPS_RECOVER_THRESHOLD
+
             and self.performance_stable_timer
             >= QUALITY_RECOVER_SECONDS
         ):
 
-            if (
-                self.quality_level
-                == 2
-            ):
+            if self.quality_level == 2:
 
                 self.quality_level = 1
 
@@ -1250,12 +1368,9 @@ class TunnelRunnerGame:
                     WORLD_SCALE_MEDIUM
                 )
 
-                self.performance_stable_timer = 0.0
+                self.performance_stable_timer = 0
 
-            elif (
-                self.quality_level
-                == 1
-            ):
+            elif self.quality_level == 1:
 
                 self.quality_level = 0
 
@@ -1263,7 +1378,7 @@ class TunnelRunnerGame:
                     WORLD_SCALE_HIGH
                 )
 
-                self.performance_stable_timer = 0.0
+                self.performance_stable_timer = 0
 
     # ========================================================
     # DISPLAY
@@ -1409,6 +1524,7 @@ class TunnelRunnerGame:
             event,
             "pos",
         ):
+
             return event
 
         data = dict(
@@ -1431,6 +1547,7 @@ class TunnelRunnerGame:
     ):
 
         if not ALLOW_FULLSCREEN:
+
             return
 
         self.fullscreen = (
@@ -1464,13 +1581,9 @@ class TunnelRunnerGame:
             )
         ):
 
-            frame = (
-                self.game_surface
-            )
+            frame = self.game_surface
 
         else:
-
-            # Normal scale is much cheaper than smoothscale.
 
             frame = pygame.transform.scale(
                 self.game_surface,
@@ -1485,7 +1598,7 @@ class TunnelRunnerGame:
         pygame.display.flip()
 
     # ========================================================
-    # BUTTONS
+    # BUTTON SETUP
     # ========================================================
 
     def _build_buttons(
@@ -1703,15 +1816,8 @@ class TunnelRunnerGame:
             )
         ):
 
-            column = (
-                index
-                % 5
-            )
-
-            row = (
-                index
-                // 5
-            )
+            column = index % 5
+            row = index // 5
 
             button = Button(
                 (
@@ -1724,7 +1830,6 @@ class TunnelRunnerGame:
                     * 160,
 
                     160,
-
                     92,
                 ),
 
@@ -1764,10 +1869,7 @@ class TunnelRunnerGame:
         self,
     ):
 
-        if (
-            self.state
-            == STATE_MAIN_MENU
-        ):
+        if self.state == STATE_MAIN_MENU:
 
             return [
                 self.levels_button,
@@ -1779,14 +1881,10 @@ class TunnelRunnerGame:
                 self.help_button,
             ]
 
-        if (
-            self.state
-            == STATE_LEVEL_SELECT
-        ):
+        if self.state == STATE_LEVEL_SELECT:
 
             return [
                 self.back_button,
-
                 *[
                     button
 
@@ -1795,10 +1893,7 @@ class TunnelRunnerGame:
                 ],
             ]
 
-        if (
-            self.state
-            == STATE_PAUSED
-        ):
+        if self.state == STATE_PAUSED:
 
             return [
                 self.pause_resume_button,
@@ -1806,20 +1901,14 @@ class TunnelRunnerGame:
                 self.pause_menu_button,
             ]
 
-        if (
-            self.state
-            == STATE_GAME_OVER
-        ):
+        if self.state == STATE_GAME_OVER:
 
             return [
                 self.retry_button,
                 self.game_over_menu_button,
             ]
 
-        if (
-            self.state
-            == STATE_LEVEL_COMPLETE
-        ):
+        if self.state == STATE_LEVEL_COMPLETE:
 
             return [
                 self.next_level_button,
@@ -1848,16 +1937,14 @@ class TunnelRunnerGame:
             pygame.mouse.get_pos()
         )
 
-        for button in (
-            self._visible_buttons()
-        ):
+        for button in self._visible_buttons():
 
             button.update(
                 mouse
             )
 
     # ========================================================
-    # ACCOUNT
+    # SESSION
     # ========================================================
 
     def update_session(
@@ -1865,11 +1952,10 @@ class TunnelRunnerGame:
     ):
 
         if not self.session_manager.update():
+
             return
 
-        if (
-            self.session_manager.signed_in
-        ):
+        if self.session_manager.signed_in:
 
             self.state = (
                 STATE_MAIN_MENU
@@ -1886,7 +1972,7 @@ class TunnelRunnerGame:
             )
 
     # ========================================================
-    # ONLINE
+    # ONLINE LEADERBOARD
     # ========================================================
 
     def start_personal_best_load(
@@ -1894,15 +1980,18 @@ class TunnelRunnerGame:
     ):
 
         if not self.session_manager.signed_in:
+
             return
 
         if self.session_manager.desktop_test_account:
+
             return
 
         if (
             self.personal_best_task
             and not self.personal_best_task.done()
         ):
+
             return
 
         self.personal_best_task = asyncio.create_task(
@@ -1920,6 +2009,7 @@ class TunnelRunnerGame:
             self.leaderboard_task
             and not self.leaderboard_task.done()
         ):
+
             return
 
         self.leaderboard_message = (
@@ -1936,6 +2026,7 @@ class TunnelRunnerGame:
     ):
 
         if not self.session_manager.signed_in:
+
             return
 
         if self.session_manager.desktop_test_account:
@@ -1950,6 +2041,7 @@ class TunnelRunnerGame:
             self.submit_task
             and not self.submit_task.done()
         ):
+
             return
 
         self.submit_message = (
@@ -1987,8 +2079,11 @@ class TunnelRunnerGame:
                     ),
                 )
 
-            except Exception:
-                pass
+            except Exception as error:
+
+                self.submit_message = (
+                    f"Best score error: {error}"
+                )
 
             self.personal_best_task = None
 
@@ -2074,23 +2169,16 @@ class TunnelRunnerGame:
         )
 
     # ========================================================
-    # RUN
+    # RUN RESET
     # ========================================================
 
     def reset_run_state(
         self,
     ):
 
-        self.camera.position = Vec3(
-            0,
-            0,
-            0,
-        )
-
-        self.camera.rotation = Vec3(
-            0,
-            0,
-            PLAYER_START_ANGLE,
+        self.camera.configure_inside(
+            camera_z=0.0,
+            player_angle=PLAYER_START_ANGLE,
         )
 
         self.camera.shake_offset = Vec2()
@@ -2110,34 +2198,41 @@ class TunnelRunnerGame:
         )
 
         self.run_end_ticks = 0
-
         self.paused_at_ticks = 0
-
         self.total_paused_ms = 0
 
         self.run_recorded = False
 
         self.last_run_distance = 0.0
-
         self.last_run_time = 0.0
-
         self.last_run_new_best = False
-
         self.last_run_new_level_time = False
-
         self.last_crash_obstacle = ""
 
         self.frozen_game_frame = None
 
         self.crash_particles.clear()
 
-        self.shake_time = 0.0
-
         self.tunnel_cache.clear()
 
         self.performance_timer = 0.0
-
         self.performance_stable_timer = 0.0
+
+        self.current_environment = (
+            ENVIRONMENT_INSIDE
+        )
+
+        self.previous_environment = (
+            ENVIRONMENT_INSIDE
+        )
+
+        self.transition_active = False
+
+        self.transition_progress = 0.0
+
+    # ========================================================
+    # START LEVEL
+    # ========================================================
 
     def start_level(
         self,
@@ -2147,6 +2242,7 @@ class TunnelRunnerGame:
         if not self.storage.is_level_unlocked(
             level_number
         ):
+
             return
 
         generated = (
@@ -2161,9 +2257,7 @@ class TunnelRunnerGame:
             generated.obstacles
         )
 
-        self.game_mode = (
-            MODE_LEVELS
-        )
+        self.game_mode = MODE_LEVELS
 
         self.selected_level_number = (
             level_number
@@ -2179,8 +2273,10 @@ class TunnelRunnerGame:
             generated.starting_angle
         )
 
-        self.camera.rotation.z = (
-            self.player_angle
+        self.current_environment = (
+            campaign_environment_for_level(
+                level_number
+            )
         )
 
         self.current_speed = (
@@ -2195,17 +2291,17 @@ class TunnelRunnerGame:
         gc.collect()
         gc.disable()
 
-        self.state = (
-            STATE_PLAYING
-        )
+        self.state = STATE_PLAYING
+
+    # ========================================================
+    # START ENDLESS
+    # ========================================================
 
     def start_endless(
         self,
     ):
 
-        self.game_mode = (
-            MODE_ENDLESS
-        )
+        self.game_mode = MODE_ENDLESS
 
         self.current_level = None
 
@@ -2216,9 +2312,13 @@ class TunnelRunnerGame:
             self.endless_generator,
         )
 
+        self.current_environment = (
+            ENVIRONMENT_INSIDE
+        )
+
         self.current_speed = (
             endless_speed_at_distance(
-                0
+                0.0
             )
         )
 
@@ -2228,18 +2328,13 @@ class TunnelRunnerGame:
         gc.collect()
         gc.disable()
 
-        self.state = (
-            STATE_PLAYING
-        )
+        self.state = STATE_PLAYING
 
     def restart_current_run(
         self,
     ):
 
-        if (
-            self.game_mode
-            == MODE_LEVELS
-        ):
+        if self.game_mode == MODE_LEVELS:
 
             self.start_level(
                 self.selected_level_number
@@ -2249,6 +2344,10 @@ class TunnelRunnerGame:
 
             self.start_endless()
 
+    # ========================================================
+    # RUN METRICS
+    # ========================================================
+
     @property
     def run_distance(
         self,
@@ -2256,7 +2355,6 @@ class TunnelRunnerGame:
 
         return max(
             0.0,
-
             self.camera.position.z
             - self.run_start_z,
         )
@@ -2265,7 +2363,7 @@ class TunnelRunnerGame:
         self,
     ):
 
-        end = (
+        ending = (
             self.run_end_ticks
 
             if self.run_end_ticks
@@ -2276,18 +2374,324 @@ class TunnelRunnerGame:
         milliseconds = max(
             0,
 
-            end
+            ending
             - self.run_start_ticks
             - self.total_paused_ms,
         )
 
         return (
             milliseconds
-            / 1000
+            / 1000.0
         )
 
     # ========================================================
-    # CRASH / COMPLETE
+    # ENVIRONMENT RESOLUTION
+    # ========================================================
+
+    def _campaign_progress_for_z(
+        self,
+        world_z,
+    ):
+
+        if (
+            self.current_level
+            is None
+            or self.current_level.length
+            <= 0
+        ):
+
+            return 0.0
+
+        return clamp(
+            world_z
+            / self.current_level.length,
+            0.0,
+            1.0,
+        )
+
+    def environment_for_world_z(
+        self,
+        world_z,
+    ):
+
+        if self.game_mode == MODE_ENDLESS:
+
+            return endless_environment_for_distance(
+                world_z
+            )
+
+        return campaign_environment_at_progress(
+            self.selected_level_number,
+            self._campaign_progress_for_z(
+                world_z
+            ),
+        )
+
+    # ========================================================
+    # CAMPAIGN TRANSITION INFO
+    # ========================================================
+
+    def _campaign_transition_info(
+        self,
+        distance,
+    ):
+
+        if (
+            self.current_level
+            is None
+            or not campaign_supports_environment_switch(
+                self.selected_level_number
+            )
+        ):
+
+            environment = (
+                campaign_environment_for_level(
+                    self.selected_level_number
+                )
+            )
+
+            return (
+                False,
+                0.0,
+                environment,
+                environment,
+            )
+
+        length = max(
+            1.0,
+            self.current_level.length,
+        )
+
+        if self.selected_level_number >= 40:
+
+            switches = (
+                0.25,
+                0.50,
+                0.75,
+            )
+
+        elif self.selected_level_number >= 30:
+
+            switches = (
+                1.0 / 3.0,
+                2.0 / 3.0,
+            )
+
+        else:
+
+            switches = (
+                0.50,
+            )
+
+        half_transition = (
+            CAMPAIGN_TRANSITION_LENGTH
+            / 2.0
+        )
+
+        for switch_progress in switches:
+
+            boundary = (
+                length
+                * switch_progress
+            )
+
+            start = (
+                boundary
+                - half_transition
+            )
+
+            end = (
+                boundary
+                + half_transition
+            )
+
+            if (
+                start
+                <= distance
+                <= end
+            ):
+
+                before_distance = max(
+                    0.0,
+                    start - 1.0,
+                )
+
+                after_distance = min(
+                    length,
+                    end + 1.0,
+                )
+
+                before = (
+                    self.environment_for_world_z(
+                        before_distance
+                    )
+                )
+
+                after = (
+                    self.environment_for_world_z(
+                        after_distance
+                    )
+                )
+
+                progress = (
+                    (
+                        distance
+                        - start
+                    )
+                    / max(
+                        1.0,
+                        CAMPAIGN_TRANSITION_LENGTH,
+                    )
+                )
+
+                return (
+                    True,
+                    clamp(
+                        progress,
+                        0.0,
+                        1.0,
+                    ),
+                    before,
+                    after,
+                )
+
+        current = (
+            self.environment_for_world_z(
+                distance
+            )
+        )
+
+        return (
+            False,
+            0.0,
+            current,
+            current,
+        )
+
+    # ========================================================
+    # UPDATE ENVIRONMENT
+    # ========================================================
+
+    def update_environment(
+        self,
+    ):
+
+        distance = (
+            self.run_distance
+        )
+
+        if self.game_mode == MODE_ENDLESS:
+
+            (
+                active,
+                progress,
+                before,
+                after,
+            ) = endless_transition_information(
+                distance,
+                transition_length=(
+                    ENDLESS_TRANSITION_LENGTH
+                ),
+            )
+
+        else:
+
+            (
+                active,
+                progress,
+                before,
+                after,
+            ) = self._campaign_transition_info(
+                distance
+            )
+
+        self.transition_active = active
+        self.transition_progress = progress
+        self.transition_from = before
+        self.transition_to = after
+
+        if active:
+
+            self.current_environment = (
+                ENVIRONMENT_TRANSITION
+            )
+
+        else:
+
+            self.current_environment = (
+                self.environment_for_world_z(
+                    distance
+                )
+            )
+
+    # ========================================================
+    # CONFIGURE CAMERA
+    # ========================================================
+
+    def configure_camera(
+        self,
+    ):
+
+        camera_z = (
+            self.run_distance
+        )
+
+        if self.transition_active:
+
+            going_outside = (
+                self.transition_to
+                == ENVIRONMENT_OUTSIDE
+            )
+
+            self.camera.configure_transition(
+                camera_z=camera_z,
+
+                player_angle=(
+                    self.player_angle
+                ),
+
+                tunnel_radius=(
+                    TUNNEL_RADIUS
+                ),
+
+                amount=(
+                    self.transition_progress
+                ),
+
+                going_outside=(
+                    going_outside
+                ),
+            )
+
+        elif (
+            self.current_environment
+            == ENVIRONMENT_OUTSIDE
+        ):
+
+            self.camera.configure_outside(
+                camera_z=camera_z,
+
+                player_angle=(
+                    self.player_angle
+                ),
+
+                tunnel_radius=(
+                    TUNNEL_RADIUS
+                ),
+            )
+
+        else:
+
+            self.camera.configure_inside(
+                camera_z=camera_z,
+
+                player_angle=(
+                    self.player_angle
+                ),
+            )
+
+    # ========================================================
+    # CRASH
     # ========================================================
 
     def trigger_crash(
@@ -2296,6 +2700,7 @@ class TunnelRunnerGame:
     ):
 
         if self.run_recorded:
+
             return
 
         self.frozen_game_frame = (
@@ -2320,10 +2725,7 @@ class TunnelRunnerGame:
             obstacle_type
         )
 
-        if (
-            self.game_mode
-            == MODE_ENDLESS
-        ):
+        if self.game_mode == MODE_ENDLESS:
 
             _best, new_best = (
                 self.storage.record_endless_run(
@@ -2371,9 +2773,11 @@ class TunnelRunnerGame:
 
         self._spawn_crash_particles()
 
-        self.state = (
-            STATE_GAME_OVER
-        )
+        self.state = STATE_GAME_OVER
+
+    # ========================================================
+    # LEVEL COMPLETE
+    # ========================================================
 
     def trigger_level_complete(
         self,
@@ -2381,9 +2785,9 @@ class TunnelRunnerGame:
 
         if (
             self.run_recorded
-            or self.current_level
-            is None
+            or self.current_level is None
         ):
+
             return
 
         self.frozen_game_frame = (
@@ -2428,9 +2832,7 @@ class TunnelRunnerGame:
 
         self._collect_achievements()
 
-        self.state = (
-            STATE_LEVEL_COMPLETE
-        )
+        self.state = STATE_LEVEL_COMPLETE
 
     # ========================================================
     # ACHIEVEMENTS
@@ -2495,10 +2897,7 @@ class TunnelRunnerGame:
             raw_event
         )
 
-        if (
-            event.type
-            == pygame.QUIT
-        ):
+        if event.type == pygame.QUIT:
 
             self.running = False
             return
@@ -2506,7 +2905,9 @@ class TunnelRunnerGame:
         if (
             event.type
             == pygame.VIDEORESIZE
+
             and not self.fullscreen
+
             and ALLOW_RESIZING
         ):
 
@@ -2521,28 +2922,16 @@ class TunnelRunnerGame:
 
             return
 
-        if (
-            event.type
-            == pygame.KEYDOWN
-        ):
+        if event.type == pygame.KEYDOWN:
 
-            if (
-                event.key
-                == pygame.K_F11
-            ):
+            if event.key == pygame.K_F11:
 
                 self.toggle_fullscreen()
                 return
 
-            if (
-                event.key
-                == pygame.K_ESCAPE
-            ):
+            if event.key == pygame.K_ESCAPE:
 
-                if (
-                    self.state
-                    == STATE_PLAYING
-                ):
+                if self.state == STATE_PLAYING:
 
                     self.frozen_game_frame = (
                         self.game_surface.copy()
@@ -2552,16 +2941,11 @@ class TunnelRunnerGame:
                         pygame.time.get_ticks()
                     )
 
-                    self.state = (
-                        STATE_PAUSED
-                    )
+                    self.state = STATE_PAUSED
 
                     return
 
-                if (
-                    self.state
-                    == STATE_PAUSED
-                ):
+                if self.state == STATE_PAUSED:
 
                     self.total_paused_ms += (
                         pygame.time.get_ticks()
@@ -2572,9 +2956,7 @@ class TunnelRunnerGame:
 
                     self.frozen_game_frame = None
 
-                    self.state = (
-                        STATE_PLAYING
-                    )
+                    self.state = STATE_PLAYING
 
                     return
 
@@ -2597,12 +2979,10 @@ class TunnelRunnerGame:
             STATE_LOADING,
             STATE_SIGN_IN_REQUIRED,
         ):
+
             return
 
-        if (
-            self.state
-            == STATE_MAIN_MENU
-        ):
+        if self.state == STATE_MAIN_MENU:
 
             if self.levels_button.clicked(
                 event
@@ -2632,53 +3012,36 @@ class TunnelRunnerGame:
                 event
             ):
 
-                self.state = (
-                    STATE_SETTINGS
-                )
+                self.state = STATE_SETTINGS
 
             elif self.stats_button.clicked(
                 event
             ):
 
-                self.state = (
-                    STATE_STATISTICS
-                )
+                self.state = STATE_STATISTICS
 
             elif self.achievements_button.clicked(
                 event
             ):
 
-                self.state = (
-                    STATE_ACHIEVEMENTS
-                )
+                self.state = STATE_ACHIEVEMENTS
 
             elif self.help_button.clicked(
                 event
             ):
 
-                self.state = (
-                    STATE_HELP
-                )
+                self.state = STATE_HELP
 
-        elif (
-            self.state
-            == STATE_LEVEL_SELECT
-        ):
+        elif self.state == STATE_LEVEL_SELECT:
 
             if self.back_button.clicked(
                 event
             ):
 
-                self.state = (
-                    STATE_MAIN_MENU
-                )
-
+                self.state = STATE_MAIN_MENU
                 return
 
-            if (
-                event.type
-                == pygame.KEYDOWN
-            ):
+            if event.type == pygame.KEYDOWN:
 
                 if event.key in (
                     pygame.K_LEFT,
@@ -2714,10 +3077,7 @@ class TunnelRunnerGame:
 
                     return
 
-        elif (
-            self.state
-            == STATE_PAUSED
-        ):
+        elif self.state == STATE_PAUSED:
 
             if self.pause_resume_button.clicked(
                 event
@@ -2732,9 +3092,7 @@ class TunnelRunnerGame:
 
                 self.frozen_game_frame = None
 
-                self.state = (
-                    STATE_PLAYING
-                )
+                self.state = STATE_PLAYING
 
             elif self.pause_restart_button.clicked(
                 event
@@ -2746,14 +3104,9 @@ class TunnelRunnerGame:
                 event
             ):
 
-                self.state = (
-                    STATE_MAIN_MENU
-                )
+                self.state = STATE_MAIN_MENU
 
-        elif (
-            self.state
-            == STATE_GAME_OVER
-        ):
+        elif self.state == STATE_GAME_OVER:
 
             if self.retry_button.clicked(
                 event
@@ -2765,14 +3118,9 @@ class TunnelRunnerGame:
                 event
             ):
 
-                self.state = (
-                    STATE_MAIN_MENU
-                )
+                self.state = STATE_MAIN_MENU
 
-        elif (
-            self.state
-            == STATE_LEVEL_COMPLETE
-        ):
+        elif self.state == STATE_LEVEL_COMPLETE:
 
             next_level = get_next_level(
                 self.selected_level_number
@@ -2798,22 +3146,15 @@ class TunnelRunnerGame:
                 event
             ):
 
-                self.state = (
-                    STATE_LEVEL_SELECT
-                )
+                self.state = STATE_LEVEL_SELECT
 
-        elif (
-            self.state
-            == STATE_LEADERBOARD
-        ):
+        elif self.state == STATE_LEADERBOARD:
 
             if self.back_button.clicked(
                 event
             ):
 
-                self.state = (
-                    STATE_MAIN_MENU
-                )
+                self.state = STATE_MAIN_MENU
 
             elif (
                 event.type
@@ -2824,10 +3165,7 @@ class TunnelRunnerGame:
 
                 self.start_leaderboard_load()
 
-        elif (
-            self.state
-            == STATE_SETTINGS
-        ):
+        elif self.state == STATE_SETTINGS:
 
             self._handle_settings_event(
                 event
@@ -2843,9 +3181,7 @@ class TunnelRunnerGame:
                 event
             ):
 
-                self.state = (
-                    STATE_MAIN_MENU
-                )
+                self.state = STATE_MAIN_MENU
 
     # ========================================================
     # SETTINGS
@@ -2860,27 +3196,22 @@ class TunnelRunnerGame:
                 "fullscreen",
                 "Fullscreen",
             ),
-
             (
                 "screen_shake",
                 "Screen Shake",
             ),
-
             (
                 "particles",
                 "Particles",
             ),
-
             (
                 "speed_lines",
                 "Speed Lines",
             ),
-
             (
                 "glow",
                 "Glow",
             ),
-
             (
                 "show_fps",
                 "Show FPS",
@@ -2920,15 +3251,13 @@ class TunnelRunnerGame:
             event
         ):
 
-            self.state = (
-                STATE_MAIN_MENU
-            )
-
+            self.state = STATE_MAIN_MENU
             return
 
         if (
             event.type
             != pygame.MOUSEBUTTONDOWN
+
             or getattr(
                 event,
                 "button",
@@ -2936,6 +3265,7 @@ class TunnelRunnerGame:
             )
             != 1
         ):
+
             return
 
         for key, _label, rect in (
@@ -2945,12 +3275,10 @@ class TunnelRunnerGame:
             if not rect.collidepoint(
                 event.pos
             ):
+
                 continue
 
-            if (
-                key
-                == "fullscreen"
-            ):
+            if key == "fullscreen":
 
                 self.toggle_fullscreen()
 
@@ -2990,14 +3318,7 @@ class TunnelRunnerGame:
             delta_time
         )
 
-        if (
-            self.state
-            != STATE_PLAYING
-        ):
-
-            self.camera.shake_offset = (
-                Vec2()
-            )
+        if self.state != STATE_PLAYING:
 
             return
 
@@ -3009,10 +3330,7 @@ class TunnelRunnerGame:
             self.run_distance
         )
 
-        if (
-            self.game_mode
-            == MODE_ENDLESS
-        ):
+        if self.game_mode == MODE_ENDLESS:
 
             self.current_speed = (
                 endless_speed_at_distance(
@@ -3022,7 +3340,7 @@ class TunnelRunnerGame:
 
             self.endless_generator.update(
                 self.obstacles,
-                self.camera.position.z,
+                distance,
             )
 
         else:
@@ -3039,28 +3357,45 @@ class TunnelRunnerGame:
             self.current_speed,
         )
 
-        self.camera.position.z += (
-            self.current_speed
+        # ----------------------------------------------------
+        # ADVANCE WORLD
+        # ----------------------------------------------------
+
+        new_distance = (
+            distance
+            + self.current_speed
             * delta_time
         )
 
-        self.camera.rotation.z = (
-            self.player_angle
+        # Temporarily store forward distance in the camera.
+        # configure_camera() will place the camera properly for
+        # the selected environment afterward.
+
+        self.camera.position.z = (
+            new_distance
         )
+
+        self.update_environment()
+
+        self.configure_camera()
+
+        # ----------------------------------------------------
+        # OBSTACLES
+        # ----------------------------------------------------
 
         self.obstacles.update(
             delta_time,
-            self.camera.position.z,
+            new_distance,
         )
 
         collision = (
             self.obstacles.check_collision(
-                self.camera.position.z,
+                new_distance,
                 self.player_angle,
             )
         )
 
-        if collision:
+        if collision is not None:
 
             self.trigger_crash(
                 collision.obstacle_type
@@ -3071,17 +3406,24 @@ class TunnelRunnerGame:
         if (
             self.game_mode
             == MODE_LEVELS
+
             and self.obstacles.reached_finish(
-                self.camera.position.z
+                new_distance
             )
         ):
 
             self.trigger_level_complete()
+
             return
 
+        # ----------------------------------------------------
+        # TUNNEL CACHE
+        # ----------------------------------------------------
+
         self.tunnel_cache.update(
-            self.camera.position.z,
+            new_distance,
             self._current_theme_name(),
+            self.environment_for_world_z,
         )
 
     # ========================================================
@@ -3138,6 +3480,7 @@ class TunnelRunnerGame:
 
                 self.player_rotation_velocity = min(
                     target,
+
                     self.player_rotation_velocity
                     + change,
                 )
@@ -3146,6 +3489,7 @@ class TunnelRunnerGame:
 
                 self.player_rotation_velocity = max(
                     target,
+
                     self.player_rotation_velocity
                     - change,
                 )
@@ -3157,33 +3501,30 @@ class TunnelRunnerGame:
                 * delta_time
             )
 
-            if (
-                self.player_rotation_velocity
-                > 0
-            ):
+            if self.player_rotation_velocity > 0:
 
                 self.player_rotation_velocity = max(
                     0,
+
                     self.player_rotation_velocity
                     - change,
                 )
 
-            elif (
-                self.player_rotation_velocity
-                < 0
-            ):
+            elif self.player_rotation_velocity < 0:
 
                 self.player_rotation_velocity = min(
                     0,
+
                     self.player_rotation_velocity
                     + change,
                 )
 
         self.player_angle = (
             self.player_angle
+
             + self.player_rotation_velocity
             * delta_time
-        ) % 360
+        ) % 360.0
 
     # ========================================================
     # PARTICLES
@@ -3194,6 +3535,7 @@ class TunnelRunnerGame:
     ):
 
         if not self.storage.particles_enabled:
+
             return
 
         center = Vec2(
@@ -3201,7 +3543,6 @@ class TunnelRunnerGame:
             GAME_CENTER_Y,
         )
 
-        # Reduced from 55.
         for _ in range(
             28
         ):
@@ -3218,6 +3559,7 @@ class TunnelRunnerGame:
     ):
 
         if not self.crash_particles:
+
             return
 
         for particle in (
@@ -3248,6 +3590,7 @@ class TunnelRunnerGame:
         if (
             self.game_mode
             == MODE_LEVELS
+
             and self.current_level
             is not None
         ):
@@ -3256,24 +3599,307 @@ class TunnelRunnerGame:
                 self.current_level.theme_name
             )
 
-        distance = self.run_distance
+        distance = (
+            self.run_distance
+        )
 
         if distance < 1000:
             return "blue"
 
-        if distance < 2200:
+        if distance < 2000:
             return "cyan"
 
-        if distance < 4000:
+        if distance < 3000:
             return "purple"
 
-        if distance < 6500:
+        if distance < 4000:
             return "orange"
 
-        if distance < 9000:
+        if distance < 5000:
             return "red"
 
-        return "white"
+        cycle = int(
+            distance
+            // 1000
+        ) % 5
+
+        return (
+            "blue",
+            "cyan",
+            "purple",
+            "orange",
+            "red",
+        )[cycle]
+
+    # ========================================================
+    # OUTSIDE OBSTACLE SURFACE
+    # ========================================================
+
+    def _angle_is_safe(
+        self,
+        obstacle,
+        angle,
+    ):
+
+        return any(
+            arc.contains(
+                angle,
+                padding=0.0,
+            )
+
+            for arc
+            in obstacle.safe_arcs()
+        )
+
+    def build_outside_obstacle_meshes(
+        self,
+    ):
+
+        meshes = []
+
+        visible = (
+            self.obstacles.visible_obstacles(
+                self.run_distance,
+                OBSTACLE_RENDER_DISTANCE,
+            )
+        )
+
+        step = (
+            360.0
+            / OUTSIDE_HAZARD_SEGMENTS
+        )
+
+        for obstacle in visible:
+
+            if (
+                obstacle.obstacle_type
+                == "finish"
+            ):
+
+                continue
+
+            faces = []
+
+            half_depth = max(
+                0.35,
+                obstacle.thickness
+                * 0.55,
+            )
+
+            for index in range(
+                OUTSIDE_HAZARD_SEGMENTS
+            ):
+
+                a0 = (
+                    index
+                    * step
+                )
+
+                a1 = (
+                    a0
+                    + step
+                )
+
+                midpoint = (
+                    a0
+                    + step
+                    / 2.0
+                )
+
+                if self._angle_is_safe(
+                    obstacle,
+                    midpoint,
+                ):
+
+                    continue
+
+                colour = (
+                    obstacle.primary_colour
+
+                    if index % 2 == 0
+
+                    else obstacle.secondary_colour
+                )
+
+                radius_inner = (
+                    OUTSIDE_HAZARD_RADIUS
+                )
+
+                radius_outer = (
+                    OUTSIDE_HAZARD_RADIUS
+                    + 1.3
+                )
+
+                z0 = (
+                    obstacle.z
+                    - half_depth
+                )
+
+                z1 = (
+                    obstacle.z
+                    + half_depth
+                )
+
+                # Exterior raised plate.
+
+                faces.append(
+                    Face3D(
+                        vertices=[
+                            tunnel_point(
+                                a0,
+                                z0,
+                                radius=radius_outer,
+                            ),
+
+                            tunnel_point(
+                                a1,
+                                z0,
+                                radius=radius_outer,
+                            ),
+
+                            tunnel_point(
+                                a1,
+                                z1,
+                                radius=radius_outer,
+                            ),
+
+                            tunnel_point(
+                                a0,
+                                z1,
+                                radius=radius_outer,
+                            ),
+                        ],
+
+                        colour=colour,
+
+                        outline_colour=WHITE,
+
+                        outline_width=1,
+
+                        double_sided=True,
+
+                        glow=True,
+                    )
+                )
+
+                # Leading slope makes hazards look attached to
+                # the outside of the cylinder rather than floating.
+
+                faces.append(
+                    Face3D(
+                        vertices=[
+                            tunnel_point(
+                                a0,
+                                z0,
+                                radius=radius_inner,
+                            ),
+
+                            tunnel_point(
+                                a1,
+                                z0,
+                                radius=radius_inner,
+                            ),
+
+                            tunnel_point(
+                                a1,
+                                z0,
+                                radius=radius_outer,
+                            ),
+
+                            tunnel_point(
+                                a0,
+                                z0,
+                                radius=radius_outer,
+                            ),
+                        ],
+
+                        colour=multiply_colour(
+                            colour,
+                            0.65,
+                        ),
+
+                        outline_colour=None,
+
+                        outline_width=0,
+
+                        double_sided=True,
+                    )
+                )
+
+            if faces:
+
+                meshes.append(
+                    Mesh3D(
+                        faces=faces
+                    )
+                )
+
+        return meshes
+
+    # ========================================================
+    # TRANSITION PORTALS
+    # ========================================================
+
+    def build_transition_meshes(
+        self,
+    ):
+
+        if not self.transition_active:
+
+            return []
+
+        theme = get_theme(
+            self._current_theme_name()
+        )
+
+        distance = (
+            self.run_distance
+        )
+
+        length = (
+            ENDLESS_TRANSITION_LENGTH
+
+            if self.game_mode
+            == MODE_ENDLESS
+
+            else CAMPAIGN_TRANSITION_LENGTH
+        )
+
+        remaining = max(
+            8.0,
+
+            length
+            * (
+                1.0
+                - self.transition_progress
+            ),
+        )
+
+        return (
+            create_environment_transition_meshes(
+                start_z=(
+                    distance
+                    + 12.0
+                ),
+
+                length=min(
+                    78.0,
+                    remaining,
+                ),
+
+                radius=(
+                    TUNNEL_RADIUS
+                ),
+
+                segments=(
+                    PERFORMANCE_TUNNEL_SEGMENTS
+                ),
+
+                colour=(
+                    theme.glow
+                ),
+            )
+        )
 
     # ========================================================
     # 3D DRAW
@@ -3301,33 +3927,81 @@ class TunnelRunnerGame:
             theme.background
         )
 
-        self.renderer.use_lighting = (
-            False
-        )
+        self.renderer.use_lighting = False
 
         self.tunnel_cache.update(
-            self.camera.position.z,
+            self.run_distance,
             theme_name,
+            self.environment_for_world_z,
         )
 
         self.renderer.add_meshes(
             self.tunnel_cache.visible_meshes(
-                self.camera.position.z
+                self.run_distance
             )
         )
 
-        self.renderer.add_meshes(
-            self.obstacles.build_visible_meshes(
-                self.camera.position.z,
-                OBSTACLE_RENDER_DISTANCE,
+        outside_amount = 0.0
+
+        if (
+            self.current_environment
+            == ENVIRONMENT_OUTSIDE
+        ):
+
+            outside_amount = 1.0
+
+        elif self.transition_active:
+
+            if (
+                self.transition_to
+                == ENVIRONMENT_OUTSIDE
+            ):
+
+                outside_amount = (
+                    self.transition_progress
+                )
+
+            else:
+
+                outside_amount = (
+                    1.0
+                    - self.transition_progress
+                )
+
+        # ----------------------------------------------------
+        # OBSTACLES
+        # ----------------------------------------------------
+
+        if outside_amount >= 0.5:
+
+            self.renderer.add_meshes(
+                self.build_outside_obstacle_meshes()
             )
+
+        else:
+
+            self.renderer.add_meshes(
+                self.obstacles.build_visible_meshes(
+                    self.run_distance,
+                    OBSTACLE_RENDER_DISTANCE,
+                )
+            )
+
+        # ----------------------------------------------------
+        # TRANSITION PORTALS
+        # ----------------------------------------------------
+
+        self.renderer.add_meshes(
+            self.build_transition_meshes()
         )
+
+        # ----------------------------------------------------
+        # RENDER
+        # ----------------------------------------------------
 
         self.renderer.draw(
             self.world_surface
         )
-
-        # Cheap upscale into full resolution.
 
         pygame.transform.scale(
             self.world_surface,
@@ -3342,15 +4016,21 @@ class TunnelRunnerGame:
             theme.glow
         )
 
+    # ========================================================
+    # SPEED LINES
+    # ========================================================
+
     def _draw_speed_lines(
         self,
         colour,
     ):
 
         if not self.storage.speed_lines_enabled:
+
             return
 
         if self.current_speed < 34:
+
             return
 
         intensity = clamp(
@@ -3359,6 +4039,7 @@ class TunnelRunnerGame:
                 - 34
             )
             / 34,
+
             0,
             1,
         )
@@ -3375,17 +4056,21 @@ class TunnelRunnerGame:
 
             angle = (
                 index
-                / count
+                / max(
+                    1,
+                    count
+                )
                 * math.tau
             )
 
             radius = (
                 190
+
                 + (
                     index
                     * 43
                     + int(
-                        self.camera.position.z
+                        self.run_distance
                         * 4
                     )
                 )
@@ -3414,8 +4099,7 @@ class TunnelRunnerGame:
                     angle
                 )
                 * (
-                    radius
-                    + 24
+                    radius + 24
                 )
             )
 
@@ -3425,8 +4109,7 @@ class TunnelRunnerGame:
                     angle
                 )
                 * (
-                    radius
-                    + 24
+                    radius + 24
                 )
             )
 
@@ -3564,8 +4247,7 @@ class TunnelRunnerGame:
 
         if (
             SHOW_LEVEL
-            and self.game_mode
-            == MODE_LEVELS
+            and self.game_mode == MODE_LEVELS
             and self.current_level
         ):
 
@@ -3594,7 +4276,7 @@ class TunnelRunnerGame:
                     self.selected_level_number,
                     self.run_distance,
                 )
-                / 100
+                / 100.0
             )
 
             draw_progress_bar(
@@ -3609,10 +4291,7 @@ class TunnelRunnerGame:
                 colour=GREEN,
             )
 
-        elif (
-            self.game_mode
-            == MODE_ENDLESS
-        ):
+        elif self.game_mode == MODE_ENDLESS:
 
             draw_panel(
                 self.game_surface,
@@ -3644,8 +4323,48 @@ class TunnelRunnerGame:
                 right=True,
             )
 
+        # ----------------------------------------------------
+        # ENVIRONMENT LABEL
+        # ----------------------------------------------------
+
+        if self.transition_active:
+
+            label = (
+                "ENTERING OUTSIDE"
+
+                if self.transition_to
+                == ENVIRONMENT_OUTSIDE
+
+                else "ENTERING TUNNEL"
+            )
+
+            colour = CYAN
+
+        elif (
+            self.current_environment
+            == ENVIRONMENT_OUTSIDE
+        ):
+
+            label = "OUTSIDE"
+            colour = ORANGE
+
+        else:
+
+            label = "INSIDE"
+            colour = CYAN
+
+        draw_text(
+            self.game_surface,
+            self.tiny_font,
+            label,
+            colour,
+            GAME_CENTER_X,
+            24,
+            center=True,
+        )
+
     # ========================================================
-    # DRAW MASTER
+    # MASTER DRAW
     # ========================================================
 
     def draw(
@@ -3654,13 +4373,9 @@ class TunnelRunnerGame:
         delta_time,
     ):
 
-        if (
-            self.state
-            == STATE_PLAYING
-        ):
+        if self.state == STATE_PLAYING:
 
             self.draw_3d_world()
-
             self.draw_hud()
 
         elif self.state in (
@@ -3669,10 +4384,7 @@ class TunnelRunnerGame:
             STATE_LEVEL_COMPLETE,
         ):
 
-            if (
-                self.frozen_game_frame
-                is not None
-            ):
+            if self.frozen_game_frame is not None:
 
                 self.game_surface.blit(
                     self.frozen_game_frame,
@@ -3685,7 +4397,6 @@ class TunnelRunnerGame:
             else:
 
                 self.draw_3d_world()
-
                 self.draw_hud()
 
         else:
@@ -3694,87 +4405,51 @@ class TunnelRunnerGame:
                 delta_time
             )
 
-        if (
-            self.state
-            == STATE_LOADING
-        ):
+        if self.state == STATE_LOADING:
 
             self.draw_loading()
 
-        elif (
-            self.state
-            == STATE_SIGN_IN_REQUIRED
-        ):
+        elif self.state == STATE_SIGN_IN_REQUIRED:
 
             self.draw_sign_in_required()
 
-        elif (
-            self.state
-            == STATE_MAIN_MENU
-        ):
+        elif self.state == STATE_MAIN_MENU:
 
             self.draw_main_menu()
 
-        elif (
-            self.state
-            == STATE_LEVEL_SELECT
-        ):
+        elif self.state == STATE_LEVEL_SELECT:
 
             self.draw_level_select()
 
-        elif (
-            self.state
-            == STATE_PAUSED
-        ):
+        elif self.state == STATE_PAUSED:
 
             self.draw_pause()
 
-        elif (
-            self.state
-            == STATE_GAME_OVER
-        ):
+        elif self.state == STATE_GAME_OVER:
 
             self.draw_game_over()
 
-        elif (
-            self.state
-            == STATE_LEVEL_COMPLETE
-        ):
+        elif self.state == STATE_LEVEL_COMPLETE:
 
             self.draw_level_complete()
 
-        elif (
-            self.state
-            == STATE_LEADERBOARD
-        ):
+        elif self.state == STATE_LEADERBOARD:
 
             self.draw_leaderboard()
 
-        elif (
-            self.state
-            == STATE_SETTINGS
-        ):
+        elif self.state == STATE_SETTINGS:
 
             self.draw_settings()
 
-        elif (
-            self.state
-            == STATE_HELP
-        ):
+        elif self.state == STATE_HELP:
 
             self.draw_help()
 
-        elif (
-            self.state
-            == STATE_STATISTICS
-        ):
+        elif self.state == STATE_STATISTICS:
 
             self.draw_statistics()
 
-        elif (
-            self.state
-            == STATE_ACHIEVEMENTS
-        ):
+        elif self.state == STATE_ACHIEVEMENTS:
 
             self.draw_achievements()
 
@@ -3797,7 +4472,7 @@ class TunnelRunnerGame:
             )
 
     # ========================================================
-    # SIMPLE SCREENS
+    # LOADING
     # ========================================================
 
     def draw_loading(
@@ -3824,6 +4499,10 @@ class TunnelRunnerGame:
             center=True,
         )
 
+    # ========================================================
+    # SIGN IN
+    # ========================================================
+
     def draw_sign_in_required(
         self,
     ):
@@ -3847,6 +4526,10 @@ class TunnelRunnerGame:
             350,
             center=True,
         )
+
+    # ========================================================
+    # MAIN MENU
+    # ========================================================
 
     def draw_main_menu(
         self,
@@ -3872,6 +4555,19 @@ class TunnelRunnerGame:
             LIGHT_BLUE,
             GAME_CENTER_X,
             160,
+            center=True,
+        )
+
+        draw_text(
+            self.game_surface,
+            self.small_font,
+            (
+                "Race inside and outside the tunnel • "
+                "A/D or arrows to rotate"
+            ),
+            LIGHT_GREY,
+            GAME_CENTER_X,
+            215,
             center=True,
         )
 
@@ -3926,6 +4622,10 @@ class TunnelRunnerGame:
             right=True,
         )
 
+    # ========================================================
+    # LEVEL SELECT
+    # ========================================================
+
     def draw_level_select(
         self,
     ):
@@ -3956,6 +4656,21 @@ class TunnelRunnerGame:
                 level_number
             )
 
+            environment = (
+                campaign_environment_for_level(
+                    level_number
+                )
+            )
+
+            environment_text = (
+                "OUTSIDE"
+
+                if environment
+                == ENVIRONMENT_OUTSIDE
+
+                else "INSIDE"
+            )
+
             draw_text(
                 self.game_surface,
                 self.tiny_font,
@@ -3966,7 +4681,24 @@ class TunnelRunnerGame:
                     else GREY
                 ),
                 button.rect.centerx,
-                button.rect.bottom + 18,
+                button.rect.bottom + 16,
+                center=True,
+            )
+
+            draw_text(
+                self.game_surface,
+                self.tiny_font,
+                environment_text,
+                (
+                    ORANGE
+
+                    if environment
+                    == ENVIRONMENT_OUTSIDE
+
+                    else CYAN
+                ),
+                button.rect.centerx,
+                button.rect.bottom + 36,
                 center=True,
             )
 
@@ -3978,9 +4710,13 @@ class TunnelRunnerGame:
             ),
             LIGHT_GREY,
             GAME_CENTER_X,
-            620,
+            650,
             center=True,
         )
+
+    # ========================================================
+    # DARK OVERLAY
+    # ========================================================
 
     def _draw_dark_overlay(
         self,
@@ -4011,6 +4747,10 @@ class TunnelRunnerGame:
             ),
         )
 
+    # ========================================================
+    # PAUSE
+    # ========================================================
+
     def draw_pause(
         self,
     ):
@@ -4038,6 +4778,10 @@ class TunnelRunnerGame:
         self.pause_menu_button.draw(
             self.game_surface
         )
+
+    # ========================================================
+    # GAME OVER
+    # ========================================================
 
     def draw_game_over(
         self,
@@ -4067,10 +4811,7 @@ class TunnelRunnerGame:
             center=True,
         )
 
-        if (
-            self.game_mode
-            == MODE_ENDLESS
-        ):
+        if self.game_mode == MODE_ENDLESS:
 
             draw_text(
                 self.game_surface,
@@ -4084,6 +4825,18 @@ class TunnelRunnerGame:
                 325,
                 center=True,
             )
+
+            if self.last_run_new_best:
+
+                draw_text(
+                    self.game_surface,
+                    self.heading_font,
+                    "NEW PERSONAL BEST!",
+                    GREEN,
+                    GAME_CENTER_X,
+                    385,
+                    center=True,
+                )
 
         else:
 
@@ -4106,6 +4859,10 @@ class TunnelRunnerGame:
         self.game_over_menu_button.draw(
             self.game_surface
         )
+
+    # ========================================================
+    # LEVEL COMPLETE
+    # ========================================================
 
     def draw_level_complete(
         self,
@@ -4148,6 +4905,18 @@ class TunnelRunnerGame:
             center=True,
         )
 
+        if self.last_run_new_level_time:
+
+            draw_text(
+                self.game_surface,
+                self.heading_font,
+                "NEW BEST TIME!",
+                YELLOW,
+                GAME_CENTER_X,
+                370,
+                center=True,
+            )
+
         next_level = get_next_level(
             self.selected_level_number
         )
@@ -4187,6 +4956,19 @@ class TunnelRunnerGame:
             center=True,
         )
 
+        draw_text(
+            self.game_surface,
+            self.small_font,
+            (
+                "Your Best: "
+                f"{format_distance(self.displayed_personal_best)}"
+            ),
+            YELLOW,
+            GAME_CENTER_X,
+            135,
+            center=True,
+        )
+
         panel = pygame.Rect(
             220,
             175,
@@ -4212,76 +4994,104 @@ class TunnelRunnerGame:
                 center=True,
             )
 
-            return
+        else:
 
-        rank = get_player_rank(
-            self.leaderboard,
-            self.session_manager.user_id,
+            rank = get_player_rank(
+                self.leaderboard,
+                self.session_manager.user_id,
+            )
+
+            if rank:
+
+                draw_text(
+                    self.game_surface,
+                    self.small_font,
+                    (
+                        f"Your rank: #{rank}"
+                    ),
+                    GREEN,
+                    panel.centerx,
+                    panel.top + 20,
+                    center=True,
+                )
+
+            for index, entry in enumerate(
+                self.leaderboard[
+                    :MAX_LEADERBOARD_ENTRIES
+                ]
+            ):
+
+                y = (
+                    panel.top
+                    + 55
+                    + index
+                    * 37
+                )
+
+                rank_number = (
+                    index + 1
+                )
+
+                colour = (
+                    YELLOW
+
+                    if rank_number == 1
+
+                    else LIGHT_BLUE
+
+                    if rank_number <= 3
+
+                    else WHITE
+                )
+
+                draw_text(
+                    self.game_surface,
+                    self.normal_font,
+                    (
+                        f"{rank_number}."
+                    ),
+                    colour,
+                    panel.left + 35,
+                    y,
+                )
+
+                draw_text(
+                    self.game_surface,
+                    self.normal_font,
+                    leaderboard_entry_name(
+                        entry
+                    ),
+                    WHITE,
+                    panel.left + 105,
+                    y,
+                )
+
+                draw_text(
+                    self.game_surface,
+                    self.normal_font,
+                    format_leaderboard_distance(
+                        leaderboard_entry_distance(
+                            entry
+                        )
+                    ),
+                    colour,
+                    panel.right - 35,
+                    y,
+                    right=True,
+                )
+
+        draw_text(
+            self.game_surface,
+            self.tiny_font,
+            "Press R to refresh",
+            LIGHT_GREY,
+            GAME_CENTER_X,
+            660,
+            center=True,
         )
 
-        if rank:
-
-            draw_text(
-                self.game_surface,
-                self.small_font,
-                f"Your rank: #{rank}",
-                GREEN,
-                panel.centerx,
-                panel.top + 20,
-                center=True,
-            )
-
-        for index, entry in enumerate(
-            self.leaderboard[
-                :MAX_LEADERBOARD_ENTRIES
-            ]
-        ):
-
-            y = (
-                panel.top
-                + 55
-                + index
-                * 37
-            )
-
-            draw_text(
-                self.game_surface,
-                self.normal_font,
-                (
-                    f"{index + 1}."
-                ),
-                WHITE,
-                panel.left + 35,
-                y,
-            )
-
-            draw_text(
-                self.game_surface,
-                self.normal_font,
-                leaderboard_entry_name(
-                    entry
-                ),
-                WHITE,
-                panel.left + 105,
-                y,
-            )
-
-            draw_text(
-                self.game_surface,
-                self.normal_font,
-                format_leaderboard_distance(
-                    leaderboard_entry_distance(
-                        entry
-                    )
-                ),
-                YELLOW,
-                panel.right - 35,
-                y,
-                right=True,
-            )
-
     # ========================================================
-    # SETTINGS / HELP / STATS / ACHIEVEMENTS
+    # SETTINGS
     # ========================================================
 
     def draw_settings(
@@ -4328,7 +5138,9 @@ class TunnelRunnerGame:
                 self.game_surface,
                 (
                     GREEN
+
                     if enabled
+
                     else RED
                 ),
                 rect,
@@ -4350,18 +5162,26 @@ class TunnelRunnerGame:
                 self.normal_font,
                 (
                     "ON"
+
                     if enabled
+
                     else "OFF"
                 ),
                 (
                     GREEN
+
                     if enabled
+
                     else RED
                 ),
                 rect.right - 18,
                 rect.top + 10,
                 right=True,
             )
+
+    # ========================================================
+    # HELP
+    # ========================================================
 
     def draw_help(
         self,
@@ -4382,12 +5202,14 @@ class TunnelRunnerGame:
         )
 
         lines = (
-            "A / D or Left / Right — rotate around the tunnel.",
-            "You automatically travel forward.",
-            "Move into openings before obstacles reach you.",
-            "Rotating hazards continue moving while approaching.",
-            "Levels get faster and harder.",
-            "Endless distance counts toward the leaderboard.",
+            "A / D or Left / Right — rotate around the cylinder.",
+            "You automatically race forward.",
+            "Avoid every blocked part of the course.",
+            "Some levels are inside the tunnel.",
+            "Other levels run along the outside of the cylinder.",
+            "Hard levels can transition between both environments.",
+            "Endless switches inside/outside every 1,000 metres.",
+            "Your Endless metres count toward the online leaderboard.",
             "Escape pauses. F11 toggles fullscreen.",
         )
 
@@ -4397,15 +5219,19 @@ class TunnelRunnerGame:
 
             draw_text(
                 self.game_surface,
-                self.normal_font,
+                self.small_font,
                 line,
                 WHITE,
                 GAME_CENTER_X,
-                200
+                175
                 + index
-                * 58,
+                * 52,
                 center=True,
             )
+
+    # ========================================================
+    # STATISTICS
+    # ========================================================
 
     def draw_statistics(
         self,
@@ -4438,6 +5264,15 @@ class TunnelRunnerGame:
                 (
                     f"{self.storage.highest_unlocked_level}"
                     f" / {TOTAL_LEVELS}"
+                ),
+            ),
+
+            (
+                "Levels Completed",
+                str(
+                    len(
+                        self.storage.completed_levels
+                    )
                 ),
             ),
 
@@ -4478,9 +5313,9 @@ class TunnelRunnerGame:
         ):
 
             y = (
-                190
+                175
                 + index
-                * 65
+                * 62
             )
 
             draw_text(
@@ -4501,6 +5336,10 @@ class TunnelRunnerGame:
                 y,
                 right=True,
             )
+
+    # ========================================================
+    # ACHIEVEMENTS
+    # ========================================================
 
     def draw_achievements(
         self,
@@ -4536,8 +5375,13 @@ class TunnelRunnerGame:
             all_ids
         ):
 
-            column = index % 2
-            row = index // 2
+            column = (
+                index % 2
+            )
+
+            row = (
+                index // 2
+            )
 
             x = (
                 180
@@ -4562,10 +5406,15 @@ class TunnelRunnerGame:
                 )
             )
 
-            if hidden and not is_unlocked:
+            if (
+                hidden
+                and not is_unlocked
+            ):
 
                 name = "???"
-                description = "Hidden achievement"
+                description = (
+                    "Hidden achievement"
+                )
 
             else:
 
@@ -4584,13 +5433,17 @@ class TunnelRunnerGame:
                 self.small_font,
                 (
                     "✓ "
+
                     if is_unlocked
+
                     else "○ "
                 )
                 + name,
                 (
                     GREEN
+
                     if is_unlocked
+
                     else GREY
                 ),
                 x,
@@ -4630,6 +5483,7 @@ class TunnelRunnerGame:
     ):
 
         if not self.current_achievement:
+
             return
 
         rect = pygame.Rect(
@@ -4668,7 +5522,7 @@ class TunnelRunnerGame:
         )
 
     # ========================================================
-    # LOOP
+    # MAIN LOOP
     # ========================================================
 
     async def run(
@@ -4683,7 +5537,7 @@ class TunnelRunnerGame:
                 self.clock.tick(
                     TARGET_FPS
                 )
-                / 1000,
+                / 1000.0,
             )
 
             current_time = (
@@ -4721,9 +5575,15 @@ class TunnelRunnerGame:
         pygame.quit()
 
 
+# ============================================================
+# ENTRY
+# ============================================================
+
 async def main():
 
-    game = TunnelRunnerGame()
+    game = (
+        TunnelRunnerGame()
+    )
 
     await game.run()
 

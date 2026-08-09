@@ -2,75 +2,77 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import Any, Iterable
 
 import pygame
-
-from config import (
-    BLACK,
-    CAMERA_FAR_CLIP,
-    CAMERA_FOV_DEGREES,
-    CAMERA_NEAR_CLIP,
-    CYAN,
-    ENABLE_DEPTH_FOG,
-    GAME_CENTER_X,
-    GAME_CENTER_Y,
-    GAME_HEIGHT,
-    GAME_WIDTH,
-    LIGHT_BLUE,
-    TUNNEL_RADIUS,
-    TUNNEL_SEGMENTS,
-    TUNNEL_VISIBLE_LENGTH,
-    WHITE,
-    clamp,
-)
 
 
 # ============================================================
 # TUNNEL RUNNER
-# GEOMETRY / 3D ENGINE
+# 3D GEOMETRY ENGINE
+# VERSION 0.2.0
 # ============================================================
 #
-# This file is the mathematical foundation of Tunnel Runner.
+# NEW:
 #
-# It contains:
+# - True inside-cylinder rendering
+# - True outside-cylinder rendering
+# - Outside-follow camera
+# - Inside camera
+# - Environment transition support
+# - Neon panel shading
+# - Atmospheric fog
+# - Depth shading
+# - Cheap panel highlights
+# - Portal rings
+# - Optimized projection
+# - Optimized depth sorting
+# - Low allocation renderer
 #
-# - 2D vectors
-# - 3D vectors
-# - 3D rotation
-# - Camera transformation
-# - Perspective projection
-# - Near-plane clipping
-# - Polygon clipping
-# - 3D faces
-# - 3D meshes
-# - Depth sorting
-# - Tunnel-ring generation
-# - Tunnel-wall generation
-# - Arc generation
-# - Circular/angular helpers
-# - Lighting helpers
-# - Fog helpers
-# - Safe Pygame polygon rendering
+# Designed to continue working with:
 #
-# IMPORTANT:
-#
-# No gameplay logic should be placed here.
-#
-# obstacles.py will use these tools to build actual 3D barriers.
-#
-# levels.py will decide where those barriers appear.
-#
-# main.py will control the camera and game loop.
+# - main.py
+# - obstacles.py
+# - levels.py
 #
 # ============================================================
 
 
 # ============================================================
-# BASIC HELPERS
+# CONSTANTS
 # ============================================================
 
-EPSILON = 0.000001
+ENVIRONMENT_INSIDE = "inside"
+
+ENVIRONMENT_OUTSIDE = "outside"
+
+ENVIRONMENT_TRANSITION = "transition"
+
+
+DEFAULT_FOV = 78.0
+
+DEFAULT_NEAR_CLIP = 0.35
+
+DEFAULT_FAR_CLIP = 550.0
+
+
+# ============================================================
+# BASIC MATH
+# ============================================================
+
+def clamp(
+    value: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+
+    return max(
+        minimum,
+        min(
+            maximum,
+            value,
+        ),
+    )
 
 
 def lerp(
@@ -78,6 +80,13 @@ def lerp(
     second: float,
     amount: float,
 ) -> float:
+
+    amount = clamp(
+        amount,
+        0.0,
+        1.0,
+    )
+
     return (
         first
         + (
@@ -88,52 +97,129 @@ def lerp(
     )
 
 
-def inverse_lerp(
-    first: float,
-    second: float,
+def smoothstep(
     value: float,
 ) -> float:
-    difference = (
-        second
-        - first
-    )
 
-    if abs(
-        difference
-    ) <= EPSILON:
-        return 0.0
-
-    return (
-        value
-        - first
-    ) / difference
-
-
-def smoothstep(
-    amount: float,
-) -> float:
-    amount = clamp(
-        amount,
+    value = clamp(
+        value,
         0.0,
         1.0,
     )
 
     return (
-        amount
-        * amount
+        value
+        * value
         * (
             3.0
             - 2.0
-            * amount
+            * value
         )
     )
 
 
-def colour_lerp(
+def normalize_degrees(
+    angle: float,
+) -> float:
+
+    return (
+        float(
+            angle
+        )
+        % 360.0
+    )
+
+
+def shortest_angle_delta(
+    current: float,
+    target: float,
+) -> float:
+
+    return (
+        (
+            target
+            - current
+            + 180.0
+        )
+        % 360.0
+        - 180.0
+    )
+
+
+def angle_in_arc(
+    angle: float,
+    center: float,
+    width: float,
+) -> bool:
+
+    width = clamp(
+        width,
+        0.0,
+        360.0,
+    )
+
+    if (
+        width
+        >= 359.999
+    ):
+
+        return True
+
+    difference = abs(
+        shortest_angle_delta(
+            center,
+            angle,
+        )
+    )
+
+    return (
+        difference
+        <= width
+        / 2.0
+    )
+
+
+def multiply_colour(
+    colour: tuple[int, int, int],
+    amount: float,
+) -> tuple[int, int, int]:
+
+    return (
+        int(
+            clamp(
+                colour[0]
+                * amount,
+                0,
+                255,
+            )
+        ),
+
+        int(
+            clamp(
+                colour[1]
+                * amount,
+                0,
+                255,
+            )
+        ),
+
+        int(
+            clamp(
+                colour[2]
+                * amount,
+                0,
+                255,
+            )
+        ),
+    )
+
+
+def blend_colour(
     first: tuple[int, int, int],
     second: tuple[int, int, int],
     amount: float,
 ) -> tuple[int, int, int]:
+
     amount = clamp(
         amount,
         0.0,
@@ -148,6 +234,7 @@ def colour_lerp(
                 amount,
             )
         ),
+
         round(
             lerp(
                 first[1],
@@ -155,6 +242,7 @@ def colour_lerp(
                 amount,
             )
         ),
+
         round(
             lerp(
                 first[2],
@@ -165,145 +253,8 @@ def colour_lerp(
     )
 
 
-def multiply_colour(
-    colour: tuple[int, int, int],
-    multiplier: float,
-) -> tuple[int, int, int]:
-    return (
-        int(
-            clamp(
-                colour[0]
-                * multiplier,
-                0,
-                255,
-            )
-        ),
-        int(
-            clamp(
-                colour[1]
-                * multiplier,
-                0,
-                255,
-            )
-        ),
-        int(
-            clamp(
-                colour[2]
-                * multiplier,
-                0,
-                255,
-            )
-        ),
-    )
-
-
-def add_colour(
-    colour: tuple[int, int, int],
-    amount: int,
-) -> tuple[int, int, int]:
-    return (
-        int(
-            clamp(
-                colour[0]
-                + amount,
-                0,
-                255,
-            )
-        ),
-        int(
-            clamp(
-                colour[1]
-                + amount,
-                0,
-                255,
-            )
-        ),
-        int(
-            clamp(
-                colour[2]
-                + amount,
-                0,
-                255,
-            )
-        ),
-    )
-
-
 # ============================================================
-# ANGLE HELPERS
-# ============================================================
-
-def normalize_degrees(
-    angle: float,
-) -> float:
-    return (
-        float(
-            angle
-        )
-        % 360.0
-    )
-
-
-def degrees_to_radians(
-    degrees: float,
-) -> float:
-    return math.radians(
-        degrees
-    )
-
-
-def radians_to_degrees(
-    radians: float,
-) -> float:
-    return math.degrees(
-        radians
-    )
-
-
-def shortest_angle_difference(
-    first: float,
-    second: float,
-) -> float:
-    return (
-        (
-            second
-            - first
-            + 180.0
-        )
-        % 360.0
-        - 180.0
-    )
-
-
-def angular_distance(
-    first: float,
-    second: float,
-) -> float:
-    return abs(
-        shortest_angle_difference(
-            first,
-            second,
-        )
-    )
-
-
-def angle_in_arc(
-    angle: float,
-    arc_center: float,
-    arc_width: float,
-) -> bool:
-    return (
-        angular_distance(
-            angle,
-            arc_center,
-        )
-        <= arc_width
-        / 2.0
-    )
-
-
-# ============================================================
-# VECTOR 2
+# VEC2
 # ============================================================
 
 @dataclass
@@ -313,7 +264,8 @@ class Vec2:
 
     def copy(
         self,
-    ) -> "Vec2":
+    ) -> Vec2:
+
         return Vec2(
             self.x,
             self.y,
@@ -321,8 +273,9 @@ class Vec2:
 
     def __add__(
         self,
-        other: "Vec2",
-    ) -> "Vec2":
+        other: Vec2,
+    ) -> Vec2:
+
         return Vec2(
             self.x
             + other.x,
@@ -333,8 +286,9 @@ class Vec2:
 
     def __sub__(
         self,
-        other: "Vec2",
-    ) -> "Vec2":
+        other: Vec2,
+    ) -> Vec2:
+
         return Vec2(
             self.x
             - other.x,
@@ -345,85 +299,57 @@ class Vec2:
 
     def __mul__(
         self,
-        scalar: float,
-    ) -> "Vec2":
+        amount: float,
+    ) -> Vec2:
+
         return Vec2(
             self.x
-            * scalar,
+            * amount,
 
             self.y
-            * scalar,
+            * amount,
         )
 
     def __rmul__(
         self,
-        scalar: float,
-    ) -> "Vec2":
+        amount: float,
+    ) -> Vec2:
+
         return self.__mul__(
-            scalar
+            amount
         )
 
     def __truediv__(
         self,
-        scalar: float,
-    ) -> "Vec2":
-        if abs(
-            scalar
-        ) <= EPSILON:
+        amount: float,
+    ) -> Vec2:
+
+        if (
+            abs(
+                amount
+            )
+            < 0.000001
+        ):
+
             return Vec2()
 
         return Vec2(
             self.x
-            / scalar,
+            / amount,
 
             self.y
-            / scalar,
-        )
-
-    def length_squared(
-        self,
-    ) -> float:
-        return (
-            self.x
-            * self.x
-            + self.y
-            * self.y
-        )
-
-    def length(
-        self,
-    ) -> float:
-        return math.sqrt(
-            self.length_squared()
-        )
-
-    def normalized(
-        self,
-    ) -> "Vec2":
-        magnitude = (
-            self.length()
-        )
-
-        if magnitude <= EPSILON:
-            return Vec2()
-
-        return self / magnitude
-
-    def tuple(
-        self,
-    ) -> tuple[float, float]:
-        return (
-            self.x,
-            self.y,
+            / amount,
         )
 
     def int_tuple(
         self,
     ) -> tuple[int, int]:
+
         return (
             round(
                 self.x
             ),
+
             round(
                 self.y
             ),
@@ -431,7 +357,7 @@ class Vec2:
 
 
 # ============================================================
-# VECTOR 3
+# VEC3
 # ============================================================
 
 @dataclass
@@ -442,7 +368,8 @@ class Vec3:
 
     def copy(
         self,
-    ) -> "Vec3":
+    ) -> Vec3:
+
         return Vec3(
             self.x,
             self.y,
@@ -451,8 +378,9 @@ class Vec3:
 
     def __add__(
         self,
-        other: "Vec3",
-    ) -> "Vec3":
+        other: Vec3,
+    ) -> Vec3:
+
         return Vec3(
             self.x
             + other.x,
@@ -466,8 +394,9 @@ class Vec3:
 
     def __sub__(
         self,
-        other: "Vec3",
-    ) -> "Vec3":
+        other: Vec3,
+    ) -> Vec3:
+
         return Vec3(
             self.x
             - other.x,
@@ -481,755 +410,118 @@ class Vec3:
 
     def __mul__(
         self,
-        scalar: float,
-    ) -> "Vec3":
+        amount: float,
+    ) -> Vec3:
+
         return Vec3(
             self.x
-            * scalar,
+            * amount,
 
             self.y
-            * scalar,
+            * amount,
 
             self.z
-            * scalar,
+            * amount,
         )
 
     def __rmul__(
         self,
-        scalar: float,
-    ) -> "Vec3":
+        amount: float,
+    ) -> Vec3:
+
         return self.__mul__(
-            scalar
+            amount
         )
 
     def __truediv__(
         self,
-        scalar: float,
-    ) -> "Vec3":
-        if abs(
-            scalar
-        ) <= EPSILON:
+        amount: float,
+    ) -> Vec3:
+
+        if (
+            abs(
+                amount
+            )
+            < 0.000001
+        ):
+
             return Vec3()
 
         return Vec3(
             self.x
-            / scalar,
+            / amount,
 
             self.y
-            / scalar,
+            / amount,
 
             self.z
-            / scalar,
+            / amount,
         )
-
-    def length_squared(
-        self,
-    ) -> float:
-        return (
-            self.x
-            * self.x
-            + self.y
-            * self.y
-            + self.z
-            * self.z
-        )
-
-    def length(
-        self,
-    ) -> float:
-        return math.sqrt(
-            self.length_squared()
-        )
-
-    def normalized(
-        self,
-    ) -> "Vec3":
-        magnitude = (
-            self.length()
-        )
-
-        if magnitude <= EPSILON:
-            return Vec3()
-
-        return self / magnitude
 
     def dot(
         self,
-        other: "Vec3",
+        other: Vec3,
     ) -> float:
+
         return (
             self.x
             * other.x
+
             + self.y
             * other.y
+
             + self.z
             * other.z
         )
 
     def cross(
         self,
-        other: "Vec3",
-    ) -> "Vec3":
+        other: Vec3,
+    ) -> Vec3:
+
         return Vec3(
-            (
-                self.y
-                * other.z
-                - self.z
-                * other.y
-            ),
+            self.y
+            * other.z
+            - self.z
+            * other.y,
 
-            (
-                self.z
-                * other.x
-                - self.x
-                * other.z
-            ),
+            self.z
+            * other.x
+            - self.x
+            * other.z,
 
-            (
-                self.x
-                * other.y
-                - self.y
-                * other.x
-            ),
+            self.x
+            * other.y
+            - self.y
+            * other.x,
         )
 
-    def distance_to(
+    def length(
         self,
-        other: "Vec3",
     ) -> float:
-        return (
-            self
-            - other
-        ).length()
 
-    def tuple(
-        self,
-    ) -> tuple[
-        float,
-        float,
-        float,
-    ]:
-        return (
-            self.x,
-            self.y,
-            self.z,
+        return math.sqrt(
+            self.x
+            * self.x
+
+            + self.y
+            * self.y
+
+            + self.z
+            * self.z
         )
 
-
-# ============================================================
-# ROTATION
-# ============================================================
-
-def rotate_x(
-    point: Vec3,
-    degrees: float,
-) -> Vec3:
-    radians = math.radians(
-        degrees
-    )
-
-    cosine = math.cos(
-        radians
-    )
-
-    sine = math.sin(
-        radians
-    )
-
-    return Vec3(
-        point.x,
-
-        point.y
-        * cosine
-        - point.z
-        * sine,
-
-        point.y
-        * sine
-        + point.z
-        * cosine,
-    )
-
-
-def rotate_y(
-    point: Vec3,
-    degrees: float,
-) -> Vec3:
-    radians = math.radians(
-        degrees
-    )
-
-    cosine = math.cos(
-        radians
-    )
-
-    sine = math.sin(
-        radians
-    )
-
-    return Vec3(
-        point.x
-        * cosine
-        + point.z
-        * sine,
-
-        point.y,
-
-        -point.x
-        * sine
-        + point.z
-        * cosine,
-    )
-
-
-def rotate_z(
-    point: Vec3,
-    degrees: float,
-) -> Vec3:
-    radians = math.radians(
-        degrees
-    )
-
-    cosine = math.cos(
-        radians
-    )
-
-    sine = math.sin(
-        radians
-    )
-
-    return Vec3(
-        point.x
-        * cosine
-        - point.y
-        * sine,
-
-        point.x
-        * sine
-        + point.y
-        * cosine,
-
-        point.z,
-    )
-
-
-def rotate_xyz(
-    point: Vec3,
-    rotation: Vec3,
-) -> Vec3:
-    result = rotate_x(
-        point,
-        rotation.x,
-    )
-
-    result = rotate_y(
-        result,
-        rotation.y,
-    )
-
-    result = rotate_z(
-        result,
-        rotation.z,
-    )
-
-    return result
-
-
-def inverse_rotate_xyz(
-    point: Vec3,
-    rotation: Vec3,
-) -> Vec3:
-    result = rotate_z(
-        point,
-        -rotation.z,
-    )
-
-    result = rotate_y(
-        result,
-        -rotation.y,
-    )
-
-    result = rotate_x(
-        result,
-        -rotation.x,
-    )
-
-    return result
-
-
-# ============================================================
-# TRANSFORM
-# ============================================================
-
-@dataclass
-class Transform3D:
-    position: Vec3 = field(
-        default_factory=Vec3
-    )
-
-    rotation: Vec3 = field(
-        default_factory=Vec3
-    )
-
-    scale: Vec3 = field(
-        default_factory=lambda: Vec3(
-            1.0,
-            1.0,
-            1.0,
-        )
-    )
-
-    def transform_point(
+    def normalized(
         self,
-        point: Vec3,
     ) -> Vec3:
-        scaled = Vec3(
-            point.x
-            * self.scale.x,
 
-            point.y
-            * self.scale.y,
+        length = self.length()
 
-            point.z
-            * self.scale.z,
-        )
+        if length <= 0.000001:
 
-        rotated = rotate_xyz(
-            scaled,
-            self.rotation,
-        )
+            return Vec3()
 
-        return (
-            rotated
-            + self.position
-        )
-
-
-# ============================================================
-# CAMERA
-# ============================================================
-
-class Camera3D:
-    """
-    Perspective camera used by Tunnel Runner.
-
-    The camera moves forward through world space.
-
-    Player movement around the tunnel is represented by camera roll.
-
-    This keeps the gameplay first-person:
-    the player remains visually centered while the tunnel rotates.
-    """
-
-    def __init__(
-        self,
-        *,
-        width: int = GAME_WIDTH,
-        height: int = GAME_HEIGHT,
-        fov_degrees: float = CAMERA_FOV_DEGREES,
-        near_clip: float = CAMERA_NEAR_CLIP,
-        far_clip: float = CAMERA_FAR_CLIP,
-    ):
-        self.width = int(
-            width
-        )
-
-        self.height = int(
-            height
-        )
-
-        self.center_x = (
-            self.width
-            / 2.0
-        )
-
-        self.center_y = (
-            self.height
-            / 2.0
-        )
-
-        self.fov_degrees = float(
-            fov_degrees
-        )
-
-        self.near_clip = float(
-            near_clip
-        )
-
-        self.far_clip = float(
-            far_clip
-        )
-
-        self.position = Vec3()
-
-        self.rotation = Vec3()
-
-        self.shake_offset = Vec2()
-
-        self._recalculate_projection()
-
-    # ========================================================
-    # PROJECTION SETTINGS
-    # ========================================================
-
-    def _recalculate_projection(
-        self,
-    ) -> None:
-        half_fov_radians = math.radians(
-            self.fov_degrees
-            / 2.0
-        )
-
-        tangent = math.tan(
-            half_fov_radians
-        )
-
-        if abs(
-            tangent
-        ) <= EPSILON:
-            tangent = 1.0
-
-        self.focal_length = (
-            self.width
-            / 2.0
-        ) / tangent
-
-    def resize(
-        self,
-        width: int,
-        height: int,
-    ) -> None:
-        self.width = max(
-            1,
-            int(
-                width
-            ),
-        )
-
-        self.height = max(
-            1,
-            int(
-                height
-            ),
-        )
-
-        self.center_x = (
-            self.width
-            / 2.0
-        )
-
-        self.center_y = (
-            self.height
-            / 2.0
-        )
-
-        self._recalculate_projection()
-
-    # ========================================================
-    # WORLD TO CAMERA
-    # ========================================================
-
-    def world_to_camera(
-        self,
-        world_point: Vec3,
-    ) -> Vec3:
-        relative = (
-            world_point
-            - self.position
-        )
-
-        return inverse_rotate_xyz(
-            relative,
-            self.rotation,
-        )
-
-    # ========================================================
-    # CAMERA TO SCREEN
-    # ========================================================
-
-    def camera_to_screen(
-        self,
-        camera_point: Vec3,
-    ) -> Vec2 | None:
-        if (
-            camera_point.z
-            <= self.near_clip
-        ):
-            return None
-
-        scale = (
-            self.focal_length
-            / camera_point.z
-        )
-
-        screen_x = (
-            self.center_x
-            + camera_point.x
-            * scale
-            + self.shake_offset.x
-        )
-
-        screen_y = (
-            self.center_y
-            - camera_point.y
-            * scale
-            + self.shake_offset.y
-        )
-
-        return Vec2(
-            screen_x,
-            screen_y,
-        )
-
-    # ========================================================
-    # WORLD TO SCREEN
-    # ========================================================
-
-    def project(
-        self,
-        world_point: Vec3,
-    ) -> Vec2 | None:
-        camera_point = (
-            self.world_to_camera(
-                world_point
-            )
-        )
-
-        return (
-            self.camera_to_screen(
-                camera_point
-            )
-        )
-
-    # ========================================================
-    # VISIBILITY
-    # ========================================================
-
-    def depth_visible(
-        self,
-        camera_z: float,
-    ) -> bool:
-        return (
-            self.near_clip
-            < camera_z
-            < self.far_clip
-        )
-
-    def world_point_visible(
-        self,
-        world_point: Vec3,
-    ) -> bool:
-        camera_point = (
-            self.world_to_camera(
-                world_point
-            )
-        )
-
-        return (
-            self.depth_visible(
-                camera_point.z
-            )
-        )
-
-
-# ============================================================
-# NEAR-PLANE CLIPPING
-# ============================================================
-
-def interpolate_vec3(
-    first: Vec3,
-    second: Vec3,
-    amount: float,
-) -> Vec3:
-    return Vec3(
-        lerp(
-            first.x,
-            second.x,
-            amount,
-        ),
-
-        lerp(
-            first.y,
-            second.y,
-            amount,
-        ),
-
-        lerp(
-            first.z,
-            second.z,
-            amount,
-        ),
-    )
-
-
-def clip_line_to_near_plane(
-    first: Vec3,
-    second: Vec3,
-    near_clip: float,
-) -> tuple[
-    Vec3,
-    Vec3,
-] | None:
-    first_inside = (
-        first.z
-        >= near_clip
-    )
-
-    second_inside = (
-        second.z
-        >= near_clip
-    )
-
-    if (
-        first_inside
-        and second_inside
-    ):
-        return (
-            first,
-            second,
-        )
-
-    if (
-        not first_inside
-        and not second_inside
-    ):
-        return None
-
-    denominator = (
-        second.z
-        - first.z
-    )
-
-    if abs(
-        denominator
-    ) <= EPSILON:
-        return None
-
-    amount = (
-        near_clip
-        - first.z
-    ) / denominator
-
-    intersection = (
-        interpolate_vec3(
-            first,
-            second,
-            amount,
-        )
-    )
-
-    intersection.z = (
-        near_clip
-    )
-
-    if first_inside:
-        return (
-            first,
-            intersection,
-        )
-
-    return (
-        intersection,
-        second,
-    )
-
-
-def clip_polygon_to_near_plane(
-    vertices: list[Vec3],
-    near_clip: float,
-) -> list[Vec3]:
-    """
-    Sutherland-Hodgman clipping against Z >= near_clip.
-    """
-
-    if len(
-        vertices
-    ) < 3:
-        return []
-
-    output: list[
-        Vec3
-    ] = []
-
-    previous = (
-        vertices[-1]
-    )
-
-    previous_inside = (
-        previous.z
-        >= near_clip
-    )
-
-    for current in vertices:
-        current_inside = (
-            current.z
-            >= near_clip
-        )
-
-        if current_inside:
-            if not previous_inside:
-                denominator = (
-                    current.z
-                    - previous.z
-                )
-
-                if abs(
-                    denominator
-                ) > EPSILON:
-                    amount = (
-                        near_clip
-                        - previous.z
-                    ) / denominator
-
-                    output.append(
-                        interpolate_vec3(
-                            previous,
-                            current,
-                            amount,
-                        )
-                    )
-
-                    output[-1].z = (
-                        near_clip
-                    )
-
-            output.append(
-                current
-            )
-
-        elif previous_inside:
-            denominator = (
-                current.z
-                - previous.z
-            )
-
-            if abs(
-                denominator
-            ) > EPSILON:
-                amount = (
-                    near_clip
-                    - previous.z
-                ) / denominator
-
-                output.append(
-                    interpolate_vec3(
-                        previous,
-                        current,
-                        amount,
-                    )
-                )
-
-                output[-1].z = (
-                    near_clip
-                )
-
-        previous = current
-
-        previous_inside = (
-            current_inside
-        )
-
-    return output
+        return self / length
 
 
 # ============================================================
@@ -1242,10 +534,7 @@ class Face3D:
 
     colour: tuple[int, int, int]
 
-    outline_colour: (
-        tuple[int, int, int]
-        | None
-    ) = None
+    outline_colour: tuple[int, int, int] | None = None
 
     outline_width: int = 0
 
@@ -1253,107 +542,9 @@ class Face3D:
 
     glow: bool = False
 
-    metadata: dict[
-        str,
-        object,
-    ] = field(
+    metadata: dict[str, Any] = field(
         default_factory=dict
     )
-
-    def copy(
-        self,
-    ) -> "Face3D":
-        return Face3D(
-            vertices=[
-                vertex.copy()
-                for vertex in self.vertices
-            ],
-
-            colour=self.colour,
-
-            outline_colour=(
-                self.outline_colour
-            ),
-
-            outline_width=(
-                self.outline_width
-            ),
-
-            double_sided=(
-                self.double_sided
-            ),
-
-            glow=(
-                self.glow
-            ),
-
-            metadata=dict(
-                self.metadata
-            ),
-        )
-
-    # ========================================================
-    # CENTRE
-    # ========================================================
-
-    def center(
-        self,
-    ) -> Vec3:
-        if not self.vertices:
-            return Vec3()
-
-        x = sum(
-            vertex.x
-            for vertex in self.vertices
-        )
-
-        y = sum(
-            vertex.y
-            for vertex in self.vertices
-        )
-
-        z = sum(
-            vertex.z
-            for vertex in self.vertices
-        )
-
-        count = len(
-            self.vertices
-        )
-
-        return Vec3(
-            x / count,
-            y / count,
-            z / count,
-        )
-
-    # ========================================================
-    # NORMAL
-    # ========================================================
-
-    def normal(
-        self,
-    ) -> Vec3:
-        if len(
-            self.vertices
-        ) < 3:
-            return Vec3()
-
-        edge_one = (
-            self.vertices[1]
-            - self.vertices[0]
-        )
-
-        edge_two = (
-            self.vertices[2]
-            - self.vertices[0]
-        )
-
-        return (
-            edge_one.cross(
-                edge_two
-            ).normalized()
-        )
 
 
 # ============================================================
@@ -1362,667 +553,35 @@ class Face3D:
 
 @dataclass
 class Mesh3D:
-    faces: list[
-        Face3D
-    ] = field(
-        default_factory=list
-    )
+    faces: list[Face3D]
 
-    transform: Transform3D = field(
-        default_factory=Transform3D
-    )
-
-    visible: bool = True
-
-    metadata: dict[
-        str,
-        object,
-    ] = field(
-        default_factory=dict
-    )
-
-    def transformed_faces(
-        self,
-    ) -> list[
-        Face3D
-    ]:
-        if not self.visible:
-            return []
-
-        transformed: list[
-            Face3D
-        ] = []
-
-        for face in self.faces:
-            transformed.append(
-                Face3D(
-                    vertices=[
-                        self.transform
-                        .transform_point(
-                            vertex
-                        )
-                        for vertex
-                        in face.vertices
-                    ],
-
-                    colour=face.colour,
-
-                    outline_colour=(
-                        face.outline_colour
-                    ),
-
-                    outline_width=(
-                        face.outline_width
-                    ),
-
-                    double_sided=(
-                        face.double_sided
-                    ),
-
-                    glow=(
-                        face.glow
-                    ),
-
-                    metadata=dict(
-                        face.metadata
-                    ),
-                )
-            )
-
-        return transformed
-
-
-# ============================================================
-# RENDERABLE FACE
-# ============================================================
-
-@dataclass
-class RenderFace:
-    points: list[
-        tuple[int, int]
-    ]
-
-    depth: float
-
-    colour: tuple[
-        int,
-        int,
-        int,
-    ]
-
-    outline_colour: (
-        tuple[int, int, int]
-        | None
-    ) = None
-
-    outline_width: int = 0
-
-    glow: bool = False
-
-    metadata: dict[
-        str,
-        object,
-    ] = field(
+    metadata: dict[str, Any] = field(
         default_factory=dict
     )
 
 
 # ============================================================
-# BACKFACE CHECK
-# ============================================================
-
-def face_facing_camera(
-    camera_vertices: list[
-        Vec3
-    ],
-) -> bool:
-    if len(
-        camera_vertices
-    ) < 3:
-        return False
-
-    edge_one = (
-        camera_vertices[1]
-        - camera_vertices[0]
-    )
-
-    edge_two = (
-        camera_vertices[2]
-        - camera_vertices[0]
-    )
-
-    normal = edge_one.cross(
-        edge_two
-    )
-
-    center = Vec3(
-        sum(
-            vertex.x
-            for vertex
-            in camera_vertices
-        )
-        / len(
-            camera_vertices
-        ),
-
-        sum(
-            vertex.y
-            for vertex
-            in camera_vertices
-        )
-        / len(
-            camera_vertices
-        ),
-
-        sum(
-            vertex.z
-            for vertex
-            in camera_vertices
-        )
-        / len(
-            camera_vertices
-        ),
-    )
-
-    camera_direction = Vec3(
-        -center.x,
-        -center.y,
-        -center.z,
-    )
-
-    return (
-        normal.dot(
-            camera_direction
-        )
-        > 0.0
-    )
-
-
-# ============================================================
-# FOG
-# ============================================================
-
-def fog_amount_for_depth(
-    depth: float,
-    *,
-    start_distance: float = (
-        TUNNEL_VISIBLE_LENGTH
-        * 0.55
-    ),
-    end_distance: float = (
-        TUNNEL_VISIBLE_LENGTH
-    ),
-) -> float:
-    if not ENABLE_DEPTH_FOG:
-        return 0.0
-
-    return clamp(
-        inverse_lerp(
-            start_distance,
-            end_distance,
-            depth,
-        ),
-        0.0,
-        1.0,
-    )
-
-
-def apply_depth_fog(
-    colour: tuple[int, int, int],
-    depth: float,
-    fog_colour: tuple[int, int, int],
-) -> tuple[int, int, int]:
-    amount = (
-        fog_amount_for_depth(
-            depth
-        )
-    )
-
-    return colour_lerp(
-        colour,
-        fog_colour,
-        amount,
-    )
-
-
-# ============================================================
-# SIMPLE LIGHTING
-# ============================================================
-
-def directional_light(
-    normal: Vec3,
-    light_direction: Vec3,
-    *,
-    ambient: float = 0.45,
-    strength: float = 0.55,
-) -> float:
-    normal = (
-        normal.normalized()
-    )
-
-    light_direction = (
-        light_direction
-        .normalized()
-    )
-
-    amount = max(
-        0.0,
-        normal.dot(
-            light_direction
-        ),
-    )
-
-    return clamp(
-        ambient
-        + amount
-        * strength,
-        0.0,
-        1.5,
-    )
-
-
-# ============================================================
-# FACE PROJECTION
-# ============================================================
-
-def project_face(
-    face: Face3D,
-    camera: Camera3D,
-    *,
-    fog_colour: tuple[int, int, int] = BLACK,
-    use_lighting: bool = False,
-    light_direction: Vec3 = Vec3(
-        0.2,
-        -0.4,
-        -1.0,
-    ),
-) -> RenderFace | None:
-    if len(
-        face.vertices
-    ) < 3:
-        return None
-
-    camera_vertices = [
-        camera.world_to_camera(
-            vertex
-        )
-        for vertex
-        in face.vertices
-    ]
-
-    clipped = (
-        clip_polygon_to_near_plane(
-            camera_vertices,
-            camera.near_clip,
-        )
-    )
-
-    if len(
-        clipped
-    ) < 3:
-        return None
-
-    if (
-        not face.double_sided
-        and not face_facing_camera(
-            clipped
-        )
-    ):
-        return None
-
-    depth = sum(
-        vertex.z
-        for vertex
-        in clipped
-    ) / len(
-        clipped
-    )
-
-    if depth > camera.far_clip:
-        return None
-
-    screen_points: list[
-        tuple[int, int]
-    ] = []
-
-    for vertex in clipped:
-        projected = (
-            camera.camera_to_screen(
-                vertex
-            )
-        )
-
-        if projected is None:
-            return None
-
-        screen_points.append(
-            projected.int_tuple()
-        )
-
-    colour = (
-        face.colour
-    )
-
-    if use_lighting:
-        if len(
-            clipped
-        ) >= 3:
-            edge_one = (
-                clipped[1]
-                - clipped[0]
-            )
-
-            edge_two = (
-                clipped[2]
-                - clipped[0]
-            )
-
-            normal = (
-                edge_one.cross(
-                    edge_two
-                )
-                .normalized()
-            )
-
-            lighting = (
-                directional_light(
-                    normal,
-                    light_direction,
-                )
-            )
-
-            colour = (
-                multiply_colour(
-                    colour,
-                    lighting,
-                )
-            )
-
-    colour = apply_depth_fog(
-        colour,
-        depth,
-        fog_colour,
-    )
-
-    outline_colour = (
-        face.outline_colour
-    )
-
-    if outline_colour is not None:
-        outline_colour = (
-            apply_depth_fog(
-                outline_colour,
-                depth,
-                fog_colour,
-            )
-        )
-
-    return RenderFace(
-        points=screen_points,
-
-        depth=depth,
-
-        colour=colour,
-
-        outline_colour=(
-            outline_colour
-        ),
-
-        outline_width=(
-            face.outline_width
-        ),
-
-        glow=face.glow,
-
-        metadata=dict(
-            face.metadata
-        ),
-    )
-
-
-# ============================================================
-# MESH PROJECTION
-# ============================================================
-
-def project_mesh(
-    mesh: Mesh3D,
-    camera: Camera3D,
-    *,
-    fog_colour: tuple[int, int, int] = BLACK,
-    use_lighting: bool = False,
-) -> list[
-    RenderFace
-]:
-    faces: list[
-        RenderFace
-    ] = []
-
-    for face in (
-        mesh.transformed_faces()
-    ):
-        projected = (
-            project_face(
-                face,
-                camera,
-                fog_colour=fog_colour,
-                use_lighting=(
-                    use_lighting
-                ),
-            )
-        )
-
-        if projected is not None:
-            faces.append(
-                projected
-            )
-
-    return faces
-
-
-# ============================================================
-# DEPTH SORTING
-# ============================================================
-
-def sort_render_faces(
-    faces: Iterable[
-        RenderFace
-    ],
-) -> list[
-    RenderFace
-]:
-    return sorted(
-        faces,
-        key=lambda face: (
-            face.depth
-        ),
-        reverse=True,
-    )
-
-
-# ============================================================
-# SAFE POLYGON DRAWING
-# ============================================================
-
-def polygon_is_reasonable(
-    points: list[
-        tuple[int, int]
-    ],
-) -> bool:
-    if len(
-        points
-    ) < 3:
-        return False
-
-    minimum_x = min(
-        point[0]
-        for point in points
-    )
-
-    maximum_x = max(
-        point[0]
-        for point in points
-    )
-
-    minimum_y = min(
-        point[1]
-        for point in points
-    )
-
-    maximum_y = max(
-        point[1]
-        for point in points
-    )
-
-    width = (
-        maximum_x
-        - minimum_x
-    )
-
-    height = (
-        maximum_y
-        - minimum_y
-    )
-
-    if (
-        width <= 0
-        or height <= 0
-    ):
-        return False
-
-    # Reject extreme clipping explosions.
-    maximum_allowed = (
-        max(
-            GAME_WIDTH,
-            GAME_HEIGHT,
-        )
-        * 12
-    )
-
-    return (
-        width
-        <= maximum_allowed
-        and height
-        <= maximum_allowed
-    )
-
-
-def draw_render_face(
-    surface: pygame.Surface,
-    render_face: RenderFace,
-) -> None:
-    if not polygon_is_reasonable(
-        render_face.points
-    ):
-        return
-
-    if render_face.glow:
-        glow_surface = (
-            pygame.Surface(
-                (
-                    GAME_WIDTH,
-                    GAME_HEIGHT,
-                ),
-                pygame.SRCALPHA,
-            )
-        )
-
-        glow_colour = (
-            render_face.colour[0],
-            render_face.colour[1],
-            render_face.colour[2],
-            55,
-        )
-
-        pygame.draw.polygon(
-            glow_surface,
-            glow_colour,
-            render_face.points,
-        )
-
-        surface.blit(
-            glow_surface,
-            (
-                0,
-                0,
-            ),
-        )
-
-    pygame.draw.polygon(
-        surface,
-        render_face.colour,
-        render_face.points,
-    )
-
-    if (
-        render_face.outline_colour
-        is not None
-        and render_face.outline_width
-        > 0
-    ):
-        pygame.draw.lines(
-            surface,
-            render_face.outline_colour,
-            True,
-            render_face.points,
-            render_face.outline_width,
-        )
-
-
-def draw_render_faces(
-    surface: pygame.Surface,
-    faces: Iterable[
-        RenderFace
-    ],
-) -> None:
-    for face in (
-        sort_render_faces(
-            faces
-        )
-    ):
-        draw_render_face(
-            surface,
-            face,
-        )
-
-
-# ============================================================
-# CYLINDER / TUNNEL HELPERS
+# TUNNEL POINT
 # ============================================================
 
 def tunnel_point(
     angle_degrees: float,
     z: float,
     *,
-    radius: float = TUNNEL_RADIUS,
-    center_x: float = 0.0,
-    center_y: float = 0.0,
+    radius: float,
 ) -> Vec3:
-    """
-    Return one point on the inside circumference of the tunnel.
-
-    Tunnel angle convention:
-
-        0°   = bottom
-        90°  = right
-        180° = top
-        270° = left
-
-    This matches player movement around the tunnel.
-    """
 
     radians = math.radians(
         angle_degrees
     )
 
     return Vec3(
-        center_x
-        + math.sin(
+        math.cos(
             radians
         )
         * radius,
 
-        center_y
-        - math.cos(
+        math.sin(
             radians
         )
         * radius,
@@ -2031,969 +590,86 @@ def tunnel_point(
     )
 
 
-def tunnel_direction(
+# ============================================================
+# ROTATE
+# ============================================================
+
+def rotate_point_z(
+    point: Vec3,
     angle_degrees: float,
+    *,
+    origin: Vec3 | None = None,
 ) -> Vec3:
+
+    if origin is None:
+
+        origin = Vec3()
+
     radians = math.radians(
         angle_degrees
     )
 
-    return Vec3(
-        math.sin(
-            radians
-        ),
-
-        -math.cos(
-            radians
-        ),
-
-        0.0,
+    cosine = math.cos(
+        radians
     )
 
+    sine = math.sin(
+        radians
+    )
 
-def tunnel_tangent(
-    angle_degrees: float,
-) -> Vec3:
-    radians = math.radians(
-        angle_degrees
+    x = (
+        point.x
+        - origin.x
+    )
+
+    y = (
+        point.y
+        - origin.y
     )
 
     return Vec3(
-        math.cos(
-            radians
-        ),
+        origin.x
+        + x
+        * cosine
+        - y
+        * sine,
 
-        math.sin(
-            radians
-        ),
+        origin.y
+        + x
+        * sine
+        + y
+        * cosine,
 
-        0.0,
+        point.z,
     )
 
-
-# ============================================================
-# TUNNEL RING
-# ============================================================
-
-def create_tunnel_ring_points(
-    z: float,
-    *,
-    radius: float = TUNNEL_RADIUS,
-    segments: int = TUNNEL_SEGMENTS,
-    rotation_degrees: float = 0.0,
-    center_x: float = 0.0,
-    center_y: float = 0.0,
-) -> list[
-    Vec3
-]:
-    points: list[
-        Vec3
-    ] = []
-
-    segments = max(
-        3,
-        int(
-            segments
-        ),
-    )
-
-    for index in range(
-        segments
-    ):
-        angle = (
-            rotation_degrees
-            + index
-            / segments
-            * 360.0
-        )
-
-        points.append(
-            tunnel_point(
-                angle,
-                z,
-                radius=radius,
-                center_x=center_x,
-                center_y=center_y,
-            )
-        )
-
-    return points
-
-
-# ============================================================
-# TUNNEL WALL SECTION
-# ============================================================
-
-def create_tunnel_section_mesh(
-    start_z: float,
-    end_z: float,
-    *,
-    radius: float = TUNNEL_RADIUS,
-    segments: int = TUNNEL_SEGMENTS,
-    start_rotation: float = 0.0,
-    end_rotation: float = 0.0,
-    start_center: Vec2 | None = None,
-    end_center: Vec2 | None = None,
-    primary_colour: tuple[
-        int,
-        int,
-        int,
-    ] = (
-        18,
-        45,
-        90,
-    ),
-    secondary_colour: tuple[
-        int,
-        int,
-        int,
-    ] = (
-        28,
-        72,
-        140,
-    ),
-    line_colour: tuple[
-        int,
-        int,
-        int,
-    ] = LIGHT_BLUE,
-    draw_outlines: bool = True,
-) -> Mesh3D:
-    """
-    Create one complete cylindrical tunnel section.
-
-    This is true 3D geometry: each wall panel is a quad connecting
-    two rings in world space.
-    """
-
-    if start_center is None:
-        start_center = Vec2()
-
-    if end_center is None:
-        end_center = Vec2()
-
-    segments = max(
-        3,
-        int(
-            segments
-        ),
-    )
-
-    start_ring = (
-        create_tunnel_ring_points(
-            start_z,
-
-            radius=radius,
-
-            segments=segments,
-
-            rotation_degrees=(
-                start_rotation
-            ),
-
-            center_x=(
-                start_center.x
-            ),
-
-            center_y=(
-                start_center.y
-            ),
-        )
-    )
-
-    end_ring = (
-        create_tunnel_ring_points(
-            end_z,
-
-            radius=radius,
-
-            segments=segments,
-
-            rotation_degrees=(
-                end_rotation
-            ),
-
-            center_x=(
-                end_center.x
-            ),
-
-            center_y=(
-                end_center.y
-            ),
-        )
-    )
-
-    faces: list[
-        Face3D
-    ] = []
-
-    for index in range(
-        segments
-    ):
-        next_index = (
-            index + 1
-        ) % segments
-
-        amount = (
-            index
-            / max(
-                1,
-                segments - 1,
-            )
-        )
-
-        colour = (
-            primary_colour
-            if index % 2 == 0
-            else secondary_colour
-        )
-
-        # Add slight cylindrical lighting variation.
-        angle = (
-            amount
-            * 360.0
-        )
-
-        light_multiplier = (
-            0.78
-            + 0.22
-            * (
-                (
-                    math.cos(
-                        math.radians(
-                            angle
-                            - 180.0
-                        )
-                    )
-                    + 1.0
-                )
-                / 2.0
-            )
-        )
-
-        colour = (
-            multiply_colour(
-                colour,
-                light_multiplier,
-            )
-        )
-
-        faces.append(
-            Face3D(
-                vertices=[
-                    start_ring[
-                        index
-                    ],
-
-                    start_ring[
-                        next_index
-                    ],
-
-                    end_ring[
-                        next_index
-                    ],
-
-                    end_ring[
-                        index
-                    ],
-                ],
-
-                colour=colour,
-
-                outline_colour=(
-                    line_colour
-                    if draw_outlines
-                    and index % 4 == 0
-                    else None
-                ),
-
-                outline_width=(
-                    1
-                    if draw_outlines
-                    and index % 4 == 0
-                    else 0
-                ),
-
-                double_sided=True,
-
-                metadata={
-                    "type": (
-                        "tunnel_wall"
-                    ),
-
-                    "segment": (
-                        index
-                    ),
-                },
-            )
-        )
-
-    return Mesh3D(
-        faces=faces,
-
-        metadata={
-            "type": (
-                "tunnel_section"
-            ),
-
-            "start_z": (
-                start_z
-            ),
-
-            "end_z": (
-                end_z
-            ),
-        },
-    )
-
-
-# ============================================================
-# TUNNEL ARC
-# ============================================================
-
-def create_tunnel_arc_points(
-    *,
-    z: float,
-    center_angle: float,
-    width_degrees: float,
-    radius: float = TUNNEL_RADIUS,
-    samples: int = 12,
-) -> list[
-    Vec3
-]:
-    width_degrees = clamp(
-        width_degrees,
-        0.0,
-        360.0,
-    )
-
-    start_angle = (
-        center_angle
-        - width_degrees
-        / 2.0
-    )
-
-    end_angle = (
-        center_angle
-        + width_degrees
-        / 2.0
-    )
-
-    points: list[
-        Vec3
-    ] = []
-
-    for index in range(
-        max(
-            1,
-            samples,
-        )
-        + 1
-    ):
-        amount = (
-            index
-            / max(
-                1,
-                samples,
-            )
-        )
-
-        angle = lerp(
-            start_angle,
-            end_angle,
-            amount,
-        )
-
-        points.append(
-            tunnel_point(
-                angle,
-                z,
-                radius=radius,
-            )
-        )
-
-    return points
-
-
-# ============================================================
-# RADIAL WALL QUAD
-# ============================================================
-
-def create_radial_wall_quad(
-    *,
-    angle_start: float,
-    angle_end: float,
-    z: float,
-    inner_radius: float,
-    outer_radius: float,
-    colour: tuple[int, int, int],
-    outline_colour: (
-        tuple[int, int, int]
-        | None
-    ) = None,
-    outline_width: int = 0,
-    glow: bool = False,
-) -> Face3D:
-    return Face3D(
-        vertices=[
-            tunnel_point(
-                angle_start,
-                z,
-                radius=inner_radius,
-            ),
-
-            tunnel_point(
-                angle_end,
-                z,
-                radius=inner_radius,
-            ),
-
-            tunnel_point(
-                angle_end,
-                z,
-                radius=outer_radius,
-            ),
-
-            tunnel_point(
-                angle_start,
-                z,
-                radius=outer_radius,
-            ),
-        ],
-
-        colour=colour,
-
-        outline_colour=(
-            outline_colour
-        ),
-
-        outline_width=(
-            outline_width
-        ),
-
-        double_sided=True,
-
-        glow=glow,
-    )
-
-
-# ============================================================
-# DISC / WALL WITH ANGULAR GAP
-# ============================================================
-
-def create_ring_wall_faces(
-    *,
-    z: float,
-    safe_angle: float,
-    safe_width_degrees: float,
-    radius: float = TUNNEL_RADIUS,
-    inner_radius: float = 0.0,
-    segments: int = 48,
-    colour: tuple[int, int, int] = (
-        255,
-        70,
-        80,
-    ),
-    outline_colour: tuple[
-        int,
-        int,
-        int,
-    ] = WHITE,
-) -> list[
-    Face3D
-]:
-    """
-    Create a circular wall across the tunnel with an angular opening.
-
-    This is useful for classic Tunnel-Rush-style walls:
-    almost the entire tunnel is blocked except one opening.
-    """
-
-    faces: list[
-        Face3D
-    ] = []
-
-    segments = max(
-        8,
-        int(
-            segments
-        ),
-    )
-
-    segment_angle = (
-        360.0
-        / segments
-    )
-
-    for index in range(
-        segments
-    ):
-        start_angle = (
-            index
-            * segment_angle
-        )
-
-        end_angle = (
-            start_angle
-            + segment_angle
-        )
-
-        midpoint = (
-            start_angle
-            + segment_angle
-            / 2.0
-        )
-
-        if angle_in_arc(
-            midpoint,
-            safe_angle,
-            safe_width_degrees,
-        ):
-            continue
-
-        faces.append(
-            create_radial_wall_quad(
-                angle_start=(
-                    start_angle
-                ),
-
-                angle_end=(
-                    end_angle
-                ),
-
-                z=z,
-
-                inner_radius=(
-                    inner_radius
-                ),
-
-                outer_radius=(
-                    radius
-                ),
-
-                colour=colour,
-
-                outline_colour=(
-                    outline_colour
-                ),
-
-                outline_width=1,
-
-                glow=False,
-            )
-        )
-
-    return faces
-
-
-# ============================================================
-# BOX MESH
-# ============================================================
-
-def create_box_mesh(
-    *,
-    center: Vec3,
-    size: Vec3,
-    colour: tuple[int, int, int],
-    outline_colour: tuple[
-        int,
-        int,
-        int,
-    ] | None = None,
-    outline_width: int = 0,
-    double_sided: bool = True,
-) -> Mesh3D:
-    half = Vec3(
-        size.x / 2.0,
-        size.y / 2.0,
-        size.z / 2.0,
-    )
-
-    vertices = [
-        Vec3(
-            center.x - half.x,
-            center.y - half.y,
-            center.z - half.z,
-        ),
-
-        Vec3(
-            center.x + half.x,
-            center.y - half.y,
-            center.z - half.z,
-        ),
-
-        Vec3(
-            center.x + half.x,
-            center.y + half.y,
-            center.z - half.z,
-        ),
-
-        Vec3(
-            center.x - half.x,
-            center.y + half.y,
-            center.z - half.z,
-        ),
-
-        Vec3(
-            center.x - half.x,
-            center.y - half.y,
-            center.z + half.z,
-        ),
-
-        Vec3(
-            center.x + half.x,
-            center.y - half.y,
-            center.z + half.z,
-        ),
-
-        Vec3(
-            center.x + half.x,
-            center.y + half.y,
-            center.z + half.z,
-        ),
-
-        Vec3(
-            center.x - half.x,
-            center.y + half.y,
-            center.z + half.z,
-        ),
-    ]
-
-    indices = (
-        (
-            0,
-            1,
-            2,
-            3,
-        ),
-
-        (
-            4,
-            7,
-            6,
-            5,
-        ),
-
-        (
-            0,
-            4,
-            5,
-            1,
-        ),
-
-        (
-            3,
-            2,
-            6,
-            7,
-        ),
-
-        (
-            1,
-            5,
-            6,
-            2,
-        ),
-
-        (
-            0,
-            3,
-            7,
-            4,
-        ),
-    )
-
-    faces: list[
-        Face3D
-    ] = []
-
-    for face_indices in indices:
-        faces.append(
-            Face3D(
-                vertices=[
-                    vertices[
-                        index
-                    ]
-                    for index
-                    in face_indices
-                ],
-
-                colour=colour,
-
-                outline_colour=(
-                    outline_colour
-                ),
-
-                outline_width=(
-                    outline_width
-                ),
-
-                double_sided=(
-                    double_sided
-                ),
-            )
-        )
-
-    return Mesh3D(
-        faces=faces
-    )
-
-
-# ============================================================
-# TRIANGLE PRISM
-# ============================================================
-
-def create_triangle_prism_mesh(
-    *,
-    center: Vec3,
-    width: float,
-    height: float,
-    depth: float,
-    colour: tuple[int, int, int],
-    outline_colour: tuple[
-        int,
-        int,
-        int,
-    ] | None = WHITE,
-) -> Mesh3D:
-    half_width = (
-        width / 2.0
-    )
-
-    half_height = (
-        height / 2.0
-    )
-
-    half_depth = (
-        depth / 2.0
-    )
-
-    front_z = (
-        center.z
-        - half_depth
-    )
-
-    back_z = (
-        center.z
-        + half_depth
-    )
-
-    front = [
-        Vec3(
-            center.x,
-            center.y
-            - half_height,
-            front_z,
-        ),
-
-        Vec3(
-            center.x
-            - half_width,
-            center.y
-            + half_height,
-            front_z,
-        ),
-
-        Vec3(
-            center.x
-            + half_width,
-            center.y
-            + half_height,
-            front_z,
-        ),
-    ]
-
-    back = [
-        Vec3(
-            center.x,
-            center.y
-            - half_height,
-            back_z,
-        ),
-
-        Vec3(
-            center.x
-            - half_width,
-            center.y
-            + half_height,
-            back_z,
-        ),
-
-        Vec3(
-            center.x
-            + half_width,
-            center.y
-            + half_height,
-            back_z,
-        ),
-    ]
-
-    faces = [
-        Face3D(
-            vertices=front,
-            colour=colour,
-            outline_colour=(
-                outline_colour
-            ),
-            outline_width=1,
-        ),
-
-        Face3D(
-            vertices=[
-                back[2],
-                back[1],
-                back[0],
-            ],
-            colour=colour,
-            outline_colour=(
-                outline_colour
-            ),
-            outline_width=1,
-        ),
-    ]
-
-    for index in range(
-        3
-    ):
-        next_index = (
-            index + 1
-        ) % 3
-
-        faces.append(
-            Face3D(
-                vertices=[
-                    front[
-                        index
-                    ],
-
-                    back[
-                        index
-                    ],
-
-                    back[
-                        next_index
-                    ],
-
-                    front[
-                        next_index
-                    ],
-                ],
-
-                colour=(
-                    multiply_colour(
-                        colour,
-                        0.82,
-                    )
-                ),
-
-                outline_colour=(
-                    outline_colour
-                ),
-
-                outline_width=1,
-            )
-        )
-
-    return Mesh3D(
-        faces=faces
-    )
-
-
-# ============================================================
-# ROTATE MESH AROUND Z
-# ============================================================
 
 def rotate_mesh_vertices_z(
     mesh: Mesh3D,
-    degrees: float,
+    angle_degrees: float,
     *,
     origin: Vec3 | None = None,
 ) -> Mesh3D:
+
     if origin is None:
+
         origin = Vec3()
 
-    result = Mesh3D(
-        metadata=dict(
-            mesh.metadata
-        )
-    )
+    faces: list[
+        Face3D
+    ] = []
 
     for face in mesh.faces:
-        new_vertices: list[
-            Vec3
-        ] = []
 
-        for vertex in face.vertices:
-            relative = (
-                vertex
-                - origin
-            )
-
-            rotated = rotate_z(
-                relative,
-                degrees,
-            )
-
-            new_vertices.append(
-                rotated
-                + origin
-            )
-
-        result.faces.append(
-            Face3D(
-                vertices=(
-                    new_vertices
-                ),
-
-                colour=(
-                    face.colour
-                ),
-
-                outline_colour=(
-                    face.outline_colour
-                ),
-
-                outline_width=(
-                    face.outline_width
-                ),
-
-                double_sided=(
-                    face.double_sided
-                ),
-
-                glow=(
-                    face.glow
-                ),
-
-                metadata=dict(
-                    face.metadata
-                ),
-            )
-        )
-
-    return result
-
-
-# ============================================================
-# TRANSLATE MESH
-# ============================================================
-
-def translate_mesh(
-    mesh: Mesh3D,
-    offset: Vec3,
-) -> Mesh3D:
-    result = Mesh3D(
-        metadata=dict(
-            mesh.metadata
-        )
-    )
-
-    for face in mesh.faces:
-        result.faces.append(
+        faces.append(
             Face3D(
                 vertices=[
-                    vertex
-                    + offset
+                    rotate_point_z(
+                        vertex,
+                        angle_degrees,
+                        origin=origin,
+                    )
+
                     for vertex
                     in face.vertices
                 ],
@@ -3024,631 +700,2102 @@ def translate_mesh(
             )
         )
 
-    return result
+    return Mesh3D(
+        faces=faces,
+
+        metadata=dict(
+            mesh.metadata
+        ),
+    )
 
 
 # ============================================================
-# MERGE MESHES
+# BOX
 # ============================================================
 
-def merge_meshes(
-    meshes: Iterable[
-        Mesh3D
-    ],
+def create_box_mesh(
+    *,
+    center: Vec3,
+    size: Vec3,
+    colour: tuple[int, int, int],
+    outline_colour: tuple[int, int, int] | None = None,
+    outline_width: int = 0,
+    double_sided: bool = True,
 ) -> Mesh3D:
-    result = Mesh3D()
 
-    for mesh in meshes:
-        result.faces.extend(
-            mesh.transformed_faces()
-        )
-
-    return result
-
-
-# ============================================================
-# TUNNEL CENTRE CURVE
-# ============================================================
-
-def tunnel_center_offset(
-    distance: float,
-    *,
-    curve_strength: float = 0.0,
-    curve_frequency: float = 0.0,
-    phase: float = 0.0,
-) -> Vec2:
-    if abs(
-        curve_strength
-    ) <= EPSILON:
-        return Vec2()
-
-    angle = (
-        distance
-        * curve_frequency
-        + phase
+    half_x = (
+        size.x
+        / 2.0
     )
 
-    return Vec2(
-        math.sin(
-            angle
-        )
-        * curve_strength,
+    half_y = (
+        size.y
+        / 2.0
+    )
 
-        math.cos(
-            angle
-            * 0.73
+    half_z = (
+        size.z
+        / 2.0
+    )
+
+    points = [
+        Vec3(
+            center.x - half_x,
+            center.y - half_y,
+            center.z - half_z,
+        ),
+
+        Vec3(
+            center.x + half_x,
+            center.y - half_y,
+            center.z - half_z,
+        ),
+
+        Vec3(
+            center.x + half_x,
+            center.y + half_y,
+            center.z - half_z,
+        ),
+
+        Vec3(
+            center.x - half_x,
+            center.y + half_y,
+            center.z - half_z,
+        ),
+
+        Vec3(
+            center.x - half_x,
+            center.y - half_y,
+            center.z + half_z,
+        ),
+
+        Vec3(
+            center.x + half_x,
+            center.y - half_y,
+            center.z + half_z,
+        ),
+
+        Vec3(
+            center.x + half_x,
+            center.y + half_y,
+            center.z + half_z,
+        ),
+
+        Vec3(
+            center.x - half_x,
+            center.y + half_y,
+            center.z + half_z,
+        ),
+    ]
+
+    indexes = (
+        (
+            0,
+            1,
+            2,
+            3,
+        ),
+
+        (
+            4,
+            7,
+            6,
+            5,
+        ),
+
+        (
+            0,
+            4,
+            5,
+            1,
+        ),
+
+        (
+            1,
+            5,
+            6,
+            2,
+        ),
+
+        (
+            2,
+            6,
+            7,
+            3,
+        ),
+
+        (
+            3,
+            7,
+            4,
+            0,
+        ),
+    )
+
+    faces = []
+
+    for index, face_indexes in enumerate(
+        indexes
+    ):
+
+        shade = (
+            0.88
+            + (
+                index
+                % 3
+            )
+            * 0.06
         )
-        * curve_strength
-        * 0.55,
+
+        faces.append(
+            Face3D(
+                vertices=[
+                    points[
+                        vertex_index
+                    ]
+
+                    for vertex_index
+                    in face_indexes
+                ],
+
+                colour=multiply_colour(
+                    colour,
+                    shade,
+                ),
+
+                outline_colour=(
+                    outline_colour
+                ),
+
+                outline_width=(
+                    outline_width
+                ),
+
+                double_sided=(
+                    double_sided
+                ),
+            )
+        )
+
+    return Mesh3D(
+        faces=faces
     )
 
 
 # ============================================================
-# TUNNEL STRIP GENERATOR
+# TUNNEL PANEL COLOUR
 # ============================================================
 
-def create_tunnel_strip_meshes(
+def tunnel_panel_colour(
+    primary_colour: tuple[int, int, int],
+    secondary_colour: tuple[int, int, int],
+    index: int,
     *,
+    outside: bool = False,
+) -> tuple[int, int, int]:
+
+    # Alternating panels create the bright Tunnel-Rush-like
+    # kaleidoscope appearance without adding extra geometry.
+
+    phase = (
+        index
+        % 6
+    )
+
+    if phase == 0:
+
+        colour = primary_colour
+
+        brightness = (
+            1.18
+            if outside
+            else 1.08
+        )
+
+    elif phase == 1:
+
+        colour = secondary_colour
+
+        brightness = 0.80
+
+    elif phase == 2:
+
+        colour = primary_colour
+
+        brightness = 0.72
+
+    elif phase == 3:
+
+        colour = secondary_colour
+
+        brightness = (
+            1.10
+            if outside
+            else 0.95
+        )
+
+    elif phase == 4:
+
+        colour = primary_colour
+
+        brightness = 0.88
+
+    else:
+
+        colour = secondary_colour
+
+        brightness = 0.68
+
+    return multiply_colour(
+        colour,
+        brightness,
+    )
+
+
+# ============================================================
+# INSIDE TUNNEL SECTION
+# ============================================================
+
+def create_tunnel_section_mesh(
     start_z: float,
     end_z: float,
-    section_length: float,
-    radius: float = TUNNEL_RADIUS,
-    segments: int = TUNNEL_SEGMENTS,
-    rotation_start: float = 0.0,
-    rotation_per_unit: float = 0.0,
-    curve_strength: float = 0.0,
-    curve_frequency: float = 0.0,
-    curve_phase: float = 0.0,
-    primary_colour: tuple[
-        int,
-        int,
-        int,
-    ] = (
-        18,
-        45,
-        90,
-    ),
-    secondary_colour: tuple[
-        int,
-        int,
-        int,
-    ] = (
-        28,
-        72,
-        140,
-    ),
-    line_colour: tuple[
-        int,
-        int,
-        int,
-    ] = LIGHT_BLUE,
-) -> list[
-    Mesh3D
-]:
-    """
-    Generate many connected tunnel pieces.
+    *,
+    radius: float,
+    segments: int,
+    start_rotation: float = 0.0,
+    end_rotation: float = 0.0,
+    primary_colour: tuple[int, int, int],
+    secondary_colour: tuple[int, int, int],
+    line_colour: tuple[int, int, int] | None = None,
+    draw_outlines: bool = False,
+) -> Mesh3D:
 
-    This is what main.py will use to make the environment appear
-    continuous as the camera flies forward.
-    """
+    segments = max(
+        6,
+        int(
+            segments
+        ),
+    )
+
+    faces: list[
+        Face3D
+    ] = []
+
+    angle_step = (
+        360.0
+        / segments
+    )
+
+    for index in range(
+        segments
+    ):
+
+        angle_a = (
+            index
+            * angle_step
+        )
+
+        angle_b = (
+            angle_a
+            + angle_step
+        )
+
+        start_a = tunnel_point(
+            angle_a
+            + start_rotation,
+
+            start_z,
+
+            radius=radius,
+        )
+
+        start_b = tunnel_point(
+            angle_b
+            + start_rotation,
+
+            start_z,
+
+            radius=radius,
+        )
+
+        end_a = tunnel_point(
+            angle_a
+            + end_rotation,
+
+            end_z,
+
+            radius=radius,
+        )
+
+        end_b = tunnel_point(
+            angle_b
+            + end_rotation,
+
+            end_z,
+
+            radius=radius,
+        )
+
+        colour = tunnel_panel_colour(
+            primary_colour,
+            secondary_colour,
+            index,
+            outside=False,
+        )
+
+        faces.append(
+            Face3D(
+                vertices=[
+                    start_a,
+                    end_a,
+                    end_b,
+                    start_b,
+                ],
+
+                colour=colour,
+
+                outline_colour=(
+                    line_colour
+
+                    if draw_outlines
+
+                    else None
+                ),
+
+                outline_width=(
+                    1
+
+                    if (
+                        draw_outlines
+                        and line_colour
+                        is not None
+                    )
+
+                    else 0
+                ),
+
+                double_sided=True,
+
+                metadata={
+                    "environment":
+                        ENVIRONMENT_INSIDE,
+
+                    "panel_index":
+                        index,
+                },
+            )
+        )
+
+    return Mesh3D(
+        faces=faces,
+
+        metadata={
+            "environment":
+                ENVIRONMENT_INSIDE,
+
+            "start_z":
+                start_z,
+
+            "end_z":
+                end_z,
+        },
+    )
+
+
+# ============================================================
+# OUTSIDE CYLINDER
+# ============================================================
+
+def create_outside_tunnel_section_mesh(
+    start_z: float,
+    end_z: float,
+    *,
+    radius: float,
+    segments: int,
+    start_rotation: float = 0.0,
+    end_rotation: float = 0.0,
+    primary_colour: tuple[int, int, int],
+    secondary_colour: tuple[int, int, int],
+    line_colour: tuple[int, int, int] | None = None,
+    draw_outlines: bool = False,
+) -> Mesh3D:
+
+    segments = max(
+        8,
+        int(
+            segments
+        ),
+    )
+
+    faces: list[
+        Face3D
+    ] = []
+
+    angle_step = (
+        360.0
+        / segments
+    )
+
+    for index in range(
+        segments
+    ):
+
+        angle_a = (
+            index
+            * angle_step
+        )
+
+        angle_b = (
+            angle_a
+            + angle_step
+        )
+
+        start_a = tunnel_point(
+            angle_a
+            + start_rotation,
+
+            start_z,
+
+            radius=radius,
+        )
+
+        start_b = tunnel_point(
+            angle_b
+            + start_rotation,
+
+            start_z,
+
+            radius=radius,
+        )
+
+        end_a = tunnel_point(
+            angle_a
+            + end_rotation,
+
+            end_z,
+
+            radius=radius,
+        )
+
+        end_b = tunnel_point(
+            angle_b
+            + end_rotation,
+
+            end_z,
+
+            radius=radius,
+        )
+
+        colour = tunnel_panel_colour(
+            primary_colour,
+            secondary_colour,
+            index,
+            outside=True,
+        )
+
+        faces.append(
+            Face3D(
+                # Reverse winding compared with the inside.
+                vertices=[
+                    start_b,
+                    end_b,
+                    end_a,
+                    start_a,
+                ],
+
+                colour=colour,
+
+                outline_colour=(
+                    line_colour
+
+                    if draw_outlines
+
+                    else None
+                ),
+
+                outline_width=(
+                    1
+
+                    if (
+                        draw_outlines
+                        and line_colour
+                        is not None
+                    )
+
+                    else 0
+                ),
+
+                double_sided=True,
+
+                metadata={
+                    "environment":
+                        ENVIRONMENT_OUTSIDE,
+
+                    "panel_index":
+                        index,
+                },
+            )
+        )
+
+    return Mesh3D(
+        faces=faces,
+
+        metadata={
+            "environment":
+                ENVIRONMENT_OUTSIDE,
+
+            "start_z":
+                start_z,
+
+            "end_z":
+                end_z,
+        },
+    )
+
+
+# ============================================================
+# TRANSITION RING
+# ============================================================
+
+def create_transition_ring_mesh(
+    z: float,
+    *,
+    radius: float,
+    segments: int,
+    colour: tuple[int, int, int],
+    thickness: float = 0.32,
+) -> Mesh3D:
+
+    segments = max(
+        8,
+        int(
+            segments
+        ),
+    )
+
+    inner_radius = (
+        radius
+        - thickness
+    )
+
+    outer_radius = (
+        radius
+        + thickness
+    )
+
+    faces: list[
+        Face3D
+    ] = []
+
+    step = (
+        360.0
+        / segments
+    )
+
+    for index in range(
+        segments
+    ):
+
+        angle_a = (
+            index
+            * step
+        )
+
+        angle_b = (
+            angle_a
+            + step
+        )
+
+        brightness = (
+            1.25
+
+            if index
+            % 2
+            == 0
+
+            else 0.72
+        )
+
+        panel_colour = multiply_colour(
+            colour,
+            brightness,
+        )
+
+        faces.append(
+            Face3D(
+                vertices=[
+                    tunnel_point(
+                        angle_a,
+                        z,
+                        radius=inner_radius,
+                    ),
+
+                    tunnel_point(
+                        angle_a,
+                        z,
+                        radius=outer_radius,
+                    ),
+
+                    tunnel_point(
+                        angle_b,
+                        z,
+                        radius=outer_radius,
+                    ),
+
+                    tunnel_point(
+                        angle_b,
+                        z,
+                        radius=inner_radius,
+                    ),
+                ],
+
+                colour=panel_colour,
+
+                outline_colour=None,
+
+                outline_width=0,
+
+                double_sided=True,
+
+                glow=True,
+
+                metadata={
+                    "transition_ring":
+                        True,
+                },
+            )
+        )
+
+    return Mesh3D(
+        faces=faces
+    )
+
+
+# ============================================================
+# TRANSITION RING GROUP
+# ============================================================
+
+def create_environment_transition_meshes(
+    *,
+    start_z: float,
+    length: float,
+    radius: float,
+    segments: int,
+    colour: tuple[int, int, int],
+) -> list[Mesh3D]:
 
     meshes: list[
         Mesh3D
     ] = []
 
-    distance = float(
-        start_z
+    ring_count = 7
+
+    usable_length = max(
+        12.0,
+        length,
     )
 
-    section_length = max(
-        0.25,
-        float(
-            section_length
-        ),
-    )
+    for index in range(
+        ring_count
+    ):
 
-    while distance < end_z:
-        next_distance = min(
-            end_z,
-            distance
-            + section_length,
-        )
-
-        start_rotation = (
-            rotation_start
-            + distance
-            * rotation_per_unit
-        )
-
-        end_rotation = (
-            rotation_start
-            + next_distance
-            * rotation_per_unit
-        )
-
-        start_center = (
-            tunnel_center_offset(
-                distance,
-
-                curve_strength=(
-                    curve_strength
-                ),
-
-                curve_frequency=(
-                    curve_frequency
-                ),
-
-                phase=(
-                    curve_phase
-                ),
+        amount = (
+            index
+            / max(
+                1,
+                ring_count - 1,
             )
         )
 
-        end_center = (
-            tunnel_center_offset(
-                next_distance,
+        z = (
+            start_z
+            + usable_length
+            * amount
+        )
 
-                curve_strength=(
-                    curve_strength
-                ),
-
-                curve_frequency=(
-                    curve_frequency
-                ),
-
-                phase=(
-                    curve_phase
-                ),
+        size_wave = (
+            math.sin(
+                amount
+                * math.pi
             )
         )
 
         meshes.append(
-            create_tunnel_section_mesh(
-                distance,
-                next_distance,
+            create_transition_ring_mesh(
+                z,
 
-                radius=radius,
+                radius=(
+                    radius
+                    + size_wave
+                    * radius
+                    * 0.18
+                ),
 
                 segments=segments,
 
-                start_rotation=(
-                    start_rotation
-                ),
+                colour=colour,
 
-                end_rotation=(
-                    end_rotation
+                thickness=(
+                    0.22
+                    + size_wave
+                    * 0.26
                 ),
-
-                start_center=(
-                    start_center
-                ),
-
-                end_center=(
-                    end_center
-                ),
-
-                primary_colour=(
-                    primary_colour
-                ),
-
-                secondary_colour=(
-                    secondary_colour
-                ),
-
-                line_colour=(
-                    line_colour
-                ),
-
-                draw_outlines=True,
             )
-        )
-
-        distance = (
-            next_distance
         )
 
     return meshes
 
 
 # ============================================================
-# 3D LINE PROJECTION
+# CAMERA
 # ============================================================
 
-def draw_3d_line(
-    surface: pygame.Surface,
-    camera: Camera3D,
-    start: Vec3,
-    end: Vec3,
-    colour: tuple[int, int, int],
-    width: int = 1,
-) -> None:
-    camera_start = (
-        camera.world_to_camera(
-            start
-        )
-    )
+class Camera3D:
 
-    camera_end = (
-        camera.world_to_camera(
-            end
-        )
-    )
-
-    clipped = (
-        clip_line_to_near_plane(
-            camera_start,
-            camera_end,
-            camera.near_clip,
-        )
-    )
-
-    if clipped is None:
-        return
-
-    camera_start, camera_end = (
-        clipped
-    )
-
-    first = (
-        camera.camera_to_screen(
-            camera_start
-        )
-    )
-
-    second = (
-        camera.camera_to_screen(
-            camera_end
-        )
-    )
-
-    if (
-        first is None
-        or second is None
+    def __init__(
+        self,
+        *,
+        width: int,
+        height: int,
+        fov: float = DEFAULT_FOV,
+        near_clip: float = DEFAULT_NEAR_CLIP,
+        far_clip: float = DEFAULT_FAR_CLIP,
     ):
-        return
 
-    pygame.draw.line(
-        surface,
-        colour,
-        first.int_tuple(),
-        second.int_tuple(),
-        max(
+        self.width = max(
             1,
             int(
                 width
             ),
-        ),
-    )
-
-
-# ============================================================
-# DEBUG AXES
-# ============================================================
-
-def draw_debug_axes(
-    surface: pygame.Surface,
-    camera: Camera3D,
-    *,
-    origin: Vec3 = Vec3(),
-    axis_length: float = 4.0,
-) -> None:
-    draw_3d_line(
-        surface,
-        camera,
-        origin,
-        origin
-        + Vec3(
-            axis_length,
-            0.0,
-            0.0,
-        ),
-        (
-            255,
-            60,
-            60,
-        ),
-        2,
-    )
-
-    draw_3d_line(
-        surface,
-        camera,
-        origin,
-        origin
-        + Vec3(
-            0.0,
-            axis_length,
-            0.0,
-        ),
-        (
-            60,
-            255,
-            80,
-        ),
-        2,
-    )
-
-    draw_3d_line(
-        surface,
-        camera,
-        origin,
-        origin
-        + Vec3(
-            0.0,
-            0.0,
-            axis_length,
-        ),
-        (
-            60,
-            130,
-            255,
-        ),
-        2,
-    )
-
-
-# ============================================================
-# SCREEN BOUNDS HELPERS
-# ============================================================
-
-def point_inside_screen(
-    point: tuple[
-        int,
-        int,
-    ],
-    *,
-    margin: int = 0,
-) -> bool:
-    return (
-        -margin
-        <= point[0]
-        <= GAME_WIDTH
-        + margin
-        and -margin
-        <= point[1]
-        <= GAME_HEIGHT
-        + margin
-    )
-
-
-def polygon_intersects_screen(
-    points: list[
-        tuple[
-            int,
-            int,
-        ]
-    ],
-) -> bool:
-    if not points:
-        return False
-
-    if any(
-        point_inside_screen(
-            point
         )
-        for point
-        in points
-    ):
-        return True
 
-    minimum_x = min(
-        point[0]
-        for point in points
-    )
+        self.height = max(
+            1,
+            int(
+                height
+            ),
+        )
 
-    maximum_x = max(
-        point[0]
-        for point in points
-    )
+        self.fov = float(
+            fov
+        )
 
-    minimum_y = min(
-        point[1]
-        for point in points
-    )
+        self.near_clip = max(
+            0.05,
+            float(
+                near_clip
+            ),
+        )
 
-    maximum_y = max(
-        point[1]
-        for point in points
-    )
+        self.far_clip = max(
+            self.near_clip
+            + 1.0,
 
-    return not (
-        maximum_x < 0
-        or minimum_x > GAME_WIDTH
-        or maximum_y < 0
-        or minimum_y > GAME_HEIGHT
-    )
+            float(
+                far_clip
+            ),
+        )
+
+        self.position = Vec3()
+
+        # x = pitch
+        # y = yaw
+        # z = roll
+
+        self.rotation = Vec3()
+
+        self.shake_offset = Vec2()
+
+        self.environment = (
+            ENVIRONMENT_INSIDE
+        )
+
+        self.environment_blend = 0.0
+
+        self.look_target: Vec3 | None = None
+
+        self.up_reference: Vec3 | None = None
+
+        self._projection_scale = 1.0
+
+        self._recalculate_projection()
+
+    # ========================================================
+    # SIZE
+    # ========================================================
+
+    def set_size(
+        self,
+        width: int,
+        height: int,
+    ) -> None:
+
+        self.width = max(
+            1,
+            int(
+                width
+            ),
+        )
+
+        self.height = max(
+            1,
+            int(
+                height
+            ),
+        )
+
+        self._recalculate_projection()
+
+    # ========================================================
+    # PROJECTION SCALE
+    # ========================================================
+
+    def _recalculate_projection(
+        self,
+    ) -> None:
+
+        half_fov = math.radians(
+            self.fov
+            / 2.0
+        )
+
+        tangent = max(
+            0.001,
+            math.tan(
+                half_fov
+            ),
+        )
+
+        self._projection_scale = (
+            self.height
+            / 2.0
+            / tangent
+        )
+
+    # ========================================================
+    # INSIDE MODE
+    # ========================================================
+
+    def configure_inside(
+        self,
+        *,
+        camera_z: float,
+        player_angle: float,
+    ) -> None:
+
+        self.environment = (
+            ENVIRONMENT_INSIDE
+        )
+
+        self.position = Vec3(
+            0.0,
+            0.0,
+            camera_z,
+        )
+
+        self.rotation = Vec3(
+            0.0,
+            0.0,
+            player_angle,
+        )
+
+        self.look_target = None
+
+        self.up_reference = None
+
+        self.environment_blend = 0.0
+
+    # ========================================================
+    # OUTSIDE MODE
+    # ========================================================
+
+    def configure_outside(
+        self,
+        *,
+        camera_z: float,
+        player_angle: float,
+        tunnel_radius: float,
+        camera_distance_multiplier: float = 2.55,
+        camera_back: float = 7.5,
+        look_ahead: float = 26.0,
+    ) -> None:
+
+        self.environment = (
+            ENVIRONMENT_OUTSIDE
+        )
+
+        radians = math.radians(
+            player_angle
+        )
+
+        radial_x = math.cos(
+            radians
+        )
+
+        radial_y = math.sin(
+            radians
+        )
+
+        camera_radius = (
+            tunnel_radius
+            * camera_distance_multiplier
+        )
+
+        self.position = Vec3(
+            radial_x
+            * camera_radius,
+
+            radial_y
+            * camera_radius,
+
+            camera_z
+            - camera_back,
+        )
+
+        target_radius = (
+            tunnel_radius
+            * 0.72
+        )
+
+        self.look_target = Vec3(
+            radial_x
+            * target_radius,
+
+            radial_y
+            * target_radius,
+
+            camera_z
+            + look_ahead,
+        )
+
+        # "Up" points away from the tube.
+        # This keeps the player's side of the cylinder visually
+        # toward the bottom of the screen.
+
+        self.up_reference = Vec3(
+            radial_x,
+            radial_y,
+            0.0,
+        ).normalized()
+
+        self.rotation.z = 0.0
+
+        self.environment_blend = 1.0
+
+    # ========================================================
+    # TRANSITION
+    # ========================================================
+
+    def configure_transition(
+        self,
+        *,
+        camera_z: float,
+        player_angle: float,
+        tunnel_radius: float,
+        amount: float,
+        going_outside: bool,
+    ) -> None:
+
+        amount = smoothstep(
+            amount
+        )
+
+        if not going_outside:
+
+            amount = (
+                1.0
+                - amount
+            )
+
+        self.environment = (
+            ENVIRONMENT_TRANSITION
+        )
+
+        self.environment_blend = (
+            amount
+        )
+
+        radians = math.radians(
+            player_angle
+        )
+
+        radial_x = math.cos(
+            radians
+        )
+
+        radial_y = math.sin(
+            radians
+        )
+
+        outside_radius = (
+            tunnel_radius
+            * 2.55
+        )
+
+        camera_radius = (
+            outside_radius
+            * amount
+        )
+
+        camera_back = (
+            7.5
+            * amount
+        )
+
+        self.position = Vec3(
+            radial_x
+            * camera_radius,
+
+            radial_y
+            * camera_radius,
+
+            camera_z
+            - camera_back,
+        )
+
+        if (
+            amount
+            < 0.15
+        ):
+
+            self.look_target = None
+
+            self.up_reference = None
+
+            self.rotation = Vec3(
+                0.0,
+                0.0,
+                player_angle,
+            )
+
+            return
+
+        target_radius = (
+            tunnel_radius
+            * 0.72
+            * amount
+        )
+
+        self.look_target = Vec3(
+            radial_x
+            * target_radius,
+
+            radial_y
+            * target_radius,
+
+            camera_z
+            + lerp(
+                10.0,
+                26.0,
+                amount,
+            ),
+        )
+
+        self.up_reference = Vec3(
+            radial_x,
+            radial_y,
+            0.0,
+        ).normalized()
+
+        self.rotation.z = (
+            player_angle
+            * (
+                1.0
+                - amount
+            )
+        )
+
+    # ========================================================
+    # EULER CAMERA
+    # ========================================================
+
+    def _world_to_camera_euler(
+        self,
+        point: Vec3,
+    ) -> Vec3:
+
+        x = (
+            point.x
+            - self.position.x
+        )
+
+        y = (
+            point.y
+            - self.position.y
+        )
+
+        z = (
+            point.z
+            - self.position.z
+        )
+
+        # ----------------------------------------------------
+        # INVERSE ROLL
+        # ----------------------------------------------------
+
+        roll = math.radians(
+            -self.rotation.z
+        )
+
+        cosine = math.cos(
+            roll
+        )
+
+        sine = math.sin(
+            roll
+        )
+
+        rolled_x = (
+            x
+            * cosine
+            - y
+            * sine
+        )
+
+        rolled_y = (
+            x
+            * sine
+            + y
+            * cosine
+        )
+
+        x = rolled_x
+        y = rolled_y
+
+        # ----------------------------------------------------
+        # INVERSE YAW
+        # ----------------------------------------------------
+
+        yaw = math.radians(
+            -self.rotation.y
+        )
+
+        cosine = math.cos(
+            yaw
+        )
+
+        sine = math.sin(
+            yaw
+        )
+
+        yaw_x = (
+            x
+            * cosine
+            - z
+            * sine
+        )
+
+        yaw_z = (
+            x
+            * sine
+            + z
+            * cosine
+        )
+
+        x = yaw_x
+        z = yaw_z
+
+        # ----------------------------------------------------
+        # INVERSE PITCH
+        # ----------------------------------------------------
+
+        pitch = math.radians(
+            -self.rotation.x
+        )
+
+        cosine = math.cos(
+            pitch
+        )
+
+        sine = math.sin(
+            pitch
+        )
+
+        pitch_y = (
+            y
+            * cosine
+            - z
+            * sine
+        )
+
+        pitch_z = (
+            y
+            * sine
+            + z
+            * cosine
+        )
+
+        y = pitch_y
+        z = pitch_z
+
+        return Vec3(
+            x,
+            y,
+            z,
+        )
+
+    # ========================================================
+    # LOOK-AT CAMERA
+    # ========================================================
+
+    def _world_to_camera_look_at(
+        self,
+        point: Vec3,
+    ) -> Vec3:
+
+        if (
+            self.look_target
+            is None
+        ):
+
+            return self._world_to_camera_euler(
+                point
+            )
+
+        forward = (
+            self.look_target
+            - self.position
+        ).normalized()
+
+        up_reference = (
+            self.up_reference
+
+            if (
+                self.up_reference
+                is not None
+            )
+
+            else Vec3(
+                0.0,
+                1.0,
+                0.0,
+            )
+        )
+
+        # If the supplied up vector happens to line up with
+        # forward, use a fallback.
+
+        right = (
+            forward.cross(
+                up_reference
+            )
+        )
+
+        if (
+            right.length()
+            < 0.001
+        ):
+
+            right = (
+                forward.cross(
+                    Vec3(
+                        1.0,
+                        0.0,
+                        0.0,
+                    )
+                )
+            )
+
+        right = right.normalized()
+
+        up = (
+            right.cross(
+                forward
+            )
+        ).normalized()
+
+        relative = (
+            point
+            - self.position
+        )
+
+        return Vec3(
+            relative.dot(
+                right
+            ),
+
+            relative.dot(
+                up
+            ),
+
+            relative.dot(
+                forward
+            ),
+        )
+
+    # ========================================================
+    # WORLD TO CAMERA
+    # ========================================================
+
+    def world_to_camera(
+        self,
+        point: Vec3,
+    ) -> Vec3:
+
+        if (
+            self.look_target
+            is not None
+        ):
+
+            return (
+                self._world_to_camera_look_at(
+                    point
+                )
+            )
+
+        return (
+            self._world_to_camera_euler(
+                point
+            )
+        )
+
+    # ========================================================
+    # PROJECT
+    # ========================================================
+
+    def project(
+        self,
+        point: Vec3,
+    ) -> tuple[
+        Vec2 | None,
+        float,
+    ]:
+
+        camera_point = (
+            self.world_to_camera(
+                point
+            )
+        )
+
+        depth = (
+            camera_point.z
+        )
+
+        if (
+            depth
+            <= self.near_clip
+            or depth
+            >= self.far_clip
+        ):
+
+            return (
+                None,
+                depth,
+            )
+
+        inverse_depth = (
+            self._projection_scale
+            / depth
+        )
+
+        screen_x = (
+            self.width
+            / 2.0
+
+            + camera_point.x
+            * inverse_depth
+
+            + self.shake_offset.x
+        )
+
+        screen_y = (
+            self.height
+            / 2.0
+
+            - camera_point.y
+            * inverse_depth
+
+            + self.shake_offset.y
+        )
+
+        return (
+            Vec2(
+                screen_x,
+                screen_y,
+            ),
+
+            depth,
+        )
 
 
 # ============================================================
-# 3D SCENE RENDERER
+# PROJECTED FACE
+# ============================================================
+
+@dataclass
+class ProjectedFace:
+    points: list[tuple[int, int]]
+
+    colour: tuple[int, int, int]
+
+    outline_colour: tuple[int, int, int] | None
+
+    outline_width: int
+
+    depth: float
+
+    glow: bool = False
+
+
+# ============================================================
+# SCENE RENDERER
 # ============================================================
 
 class SceneRenderer3D:
-    """
-    Collects meshes and renders all faces in depth order.
-
-    obstacles.py and main.py can both submit meshes here.
-    """
 
     def __init__(
         self,
         camera: Camera3D,
     ):
+
         self.camera = camera
 
         self.meshes: list[
             Mesh3D
         ] = []
 
-        self.extra_faces: list[
-            Face3D
-        ] = []
+        self.fog_colour: tuple[
+            int,
+            int,
+            int,
+        ] = (
+            0,
+            0,
+            0,
+        )
 
-        self.fog_colour = BLACK
+        self.fog_start = 65.0
+
+        self.fog_end = 330.0
 
         self.use_lighting = False
+
+        self.use_fog = True
+
+    # ========================================================
+    # CLEAR
+    # ========================================================
 
     def clear(
         self,
     ) -> None:
+
         self.meshes.clear()
 
-        self.extra_faces.clear()
+    # ========================================================
+    # ADD
+    # ========================================================
 
     def add_mesh(
         self,
         mesh: Mesh3D,
     ) -> None:
-        if mesh.visible:
-            self.meshes.append(
-                mesh
-            )
+
+        self.meshes.append(
+            mesh
+        )
 
     def add_meshes(
         self,
-        meshes: Iterable[
-            Mesh3D
-        ],
+        meshes: Iterable[Mesh3D],
     ) -> None:
-        for mesh in meshes:
-            self.add_mesh(
-                mesh
-            )
 
-    def add_face(
+        self.meshes.extend(
+            meshes
+        )
+
+    # ========================================================
+    # FOG
+    # ========================================================
+
+    def _apply_fog(
+        self,
+        colour: tuple[int, int, int],
+        depth: float,
+    ) -> tuple[int, int, int]:
+
+        if not self.use_fog:
+
+            return colour
+
+        if (
+            depth
+            <= self.fog_start
+        ):
+
+            return colour
+
+        amount = (
+            (
+                depth
+                - self.fog_start
+            )
+            / max(
+                1.0,
+                self.fog_end
+                - self.fog_start,
+            )
+        )
+
+        amount = clamp(
+            amount,
+            0.0,
+            1.0,
+        )
+
+        # Smooth fog keeps the far end of the tunnel from looking
+        # like a wall of flat polygons.
+
+        amount = smoothstep(
+            amount
+        )
+
+        return blend_colour(
+            colour,
+            self.fog_colour,
+            amount,
+        )
+
+    # ========================================================
+    # FACE SHADE
+    # ========================================================
+
+    def _depth_shade(
+        self,
+        colour: tuple[int, int, int],
+        depth: float,
+    ) -> tuple[int, int, int]:
+
+        # Cheap pseudo-lighting.
+        #
+        # Nearby geometry is a little brighter.
+        # Far geometry gets slightly darker before fog.
+
+        brightness = lerp(
+            1.08,
+            0.78,
+            clamp(
+                depth
+                / 300.0,
+                0.0,
+                1.0,
+            ),
+        )
+
+        return multiply_colour(
+            colour,
+            brightness,
+        )
+
+    # ========================================================
+    # PROJECT FACE
+    # ========================================================
+
+    def _project_face(
         self,
         face: Face3D,
-    ) -> None:
-        self.extra_faces.append(
-            face
-        )
+    ) -> ProjectedFace | None:
 
-    def build_render_faces(
-        self,
-    ) -> list[
-        RenderFace
-    ]:
-        render_faces: list[
-            RenderFace
+        if (
+            len(
+                face.vertices
+            )
+            < 3
+        ):
+
+            return None
+
+        points: list[
+            tuple[int, int]
         ] = []
 
-        for mesh in self.meshes:
-            render_faces.extend(
-                project_mesh(
-                    mesh,
-                    self.camera,
+        depth_total = 0.0
 
-                    fog_colour=(
-                        self.fog_colour
-                    ),
+        visible_vertices = 0
 
-                    use_lighting=(
-                        self.use_lighting
-                    ),
+        for vertex in face.vertices:
+
+            projected, depth = (
+                self.camera.project(
+                    vertex
                 )
             )
 
-        for face in (
-            self.extra_faces
-        ):
-            projected = (
-                project_face(
-                    face,
-                    self.camera,
+            if projected is None:
 
-                    fog_colour=(
-                        self.fog_colour
-                    ),
+                # Faces that cross the near plane are skipped.
+                # This is cheaper than polygon clipping and prevents
+                # massive screen-filling triangles.
 
-                    use_lighting=(
-                        self.use_lighting
-                    ),
-                )
+                return None
+
+            points.append(
+                projected.int_tuple()
             )
 
-            if projected is not None:
-                render_faces.append(
-                    projected
-                )
+            depth_total += (
+                depth
+            )
 
-        return (
-            sort_render_faces(
-                render_faces
+            visible_vertices += 1
+
+        if visible_vertices == 0:
+
+            return None
+
+        depth = (
+            depth_total
+            / visible_vertices
+        )
+
+        colour = (
+            face.colour
+        )
+
+        colour = (
+            self._depth_shade(
+                colour,
+                depth,
             )
         )
+
+        colour = (
+            self._apply_fog(
+                colour,
+                depth,
+            )
+        )
+
+        outline_colour = (
+            face.outline_colour
+        )
+
+        if (
+            outline_colour
+            is not None
+        ):
+
+            outline_colour = (
+                self._apply_fog(
+                    outline_colour,
+                    depth,
+                )
+            )
+
+        return ProjectedFace(
+            points=points,
+
+            colour=colour,
+
+            outline_colour=(
+                outline_colour
+            ),
+
+            outline_width=(
+                face.outline_width
+            ),
+
+            depth=depth,
+
+            glow=face.glow,
+        )
+
+    # ========================================================
+    # DRAW
+    # ========================================================
 
     def draw(
         self,
         surface: pygame.Surface,
     ) -> None:
-        render_faces = (
-            self.build_render_faces()
+
+        projected_faces: list[
+            ProjectedFace
+        ] = []
+
+        append_face = (
+            projected_faces.append
         )
 
-        for render_face in (
-            render_faces
-        ):
-            if not (
-                polygon_intersects_screen(
-                    render_face.points
+        for mesh in self.meshes:
+
+            for face in mesh.faces:
+
+                projected = (
+                    self._project_face(
+                        face
+                    )
                 )
+
+                if (
+                    projected
+                    is not None
+                ):
+
+                    append_face(
+                        projected
+                    )
+
+        # Painter's algorithm:
+        # far geometry first.
+
+        projected_faces.sort(
+            key=lambda item:
+            item.depth,
+            reverse=True,
+        )
+
+        draw_polygon = (
+            pygame.draw.polygon
+        )
+
+        for face in projected_faces:
+
+            # Very distant tiny faces sometimes collapse into
+            # duplicate points. pygame handles most cases but this
+            # check avoids unnecessary calls.
+
+            if (
+                len(
+                    set(
+                        face.points
+                    )
+                )
+                < 3
             ):
+
                 continue
 
-            draw_render_face(
+            draw_polygon(
                 surface,
-                render_face,
+                face.colour,
+                face.points,
             )
 
+            if (
+                face.outline_colour
+                is not None
+
+                and face.outline_width
+                > 0
+            ):
+
+                draw_polygon(
+                    surface,
+                    face.outline_colour,
+                    face.points,
+                    width=(
+                        face.outline_width
+                    ),
+                )
+
 
 # ============================================================
-# PROJECTED TUNNEL POSITION
+# ENVIRONMENT HELPERS
 # ============================================================
 
-def projected_tunnel_position(
-    camera: Camera3D,
-    angle_degrees: float,
+def endless_environment_for_distance(
+    distance: float,
+) -> str:
+
+    # Exactly what we wanted:
+    #
+    # 0-999        inside
+    # 1000-1999    outside
+    # 2000-2999    inside
+    # 3000-3999    outside
+    # ...
+
+    section = int(
+        max(
+            0.0,
+            distance,
+        )
+        // 1000.0
+    )
+
+    if (
+        section
+        % 2
+        == 0
+    ):
+
+        return ENVIRONMENT_INSIDE
+
+    return ENVIRONMENT_OUTSIDE
+
+
+def endless_transition_information(
     distance: float,
     *,
-    radius: float = TUNNEL_RADIUS,
-) -> Vec2 | None:
-    point = tunnel_point(
-        angle_degrees,
-        camera.position.z
-        + distance,
-        radius=radius,
+    transition_length: float = 120.0,
+) -> tuple[
+    bool,
+    float,
+    str,
+    str,
+]:
+
+    distance = max(
+        0.0,
+        distance,
     )
 
-    return camera.project(
-        point
+    if (
+        distance
+        < 1000.0
+    ):
+
+        return (
+            False,
+            0.0,
+            ENVIRONMENT_INSIDE,
+            ENVIRONMENT_INSIDE,
+        )
+
+    boundary = (
+        math.floor(
+            distance
+            / 1000.0
+        )
+        * 1000.0
     )
 
+    transition_start = (
+        boundary
+        - transition_length
+        / 2.0
+    )
 
-# ============================================================
-# ANGULAR PLAYER MARKER POSITION
-# ============================================================
+    transition_end = (
+        boundary
+        + transition_length
+        / 2.0
+    )
 
-def projected_player_tunnel_point(
-    camera: Camera3D,
-    player_angle: float,
-    *,
-    distance: float = 3.0,
-    radius: float = TUNNEL_RADIUS,
-) -> Vec2 | None:
-    """
-    Useful for debugging.
+    if not (
+        transition_start
+        <= distance
+        <= transition_end
+    ):
 
-    In normal gameplay the player is first-person and not rendered.
-    """
+        current = (
+            endless_environment_for_distance(
+                distance
+            )
+        )
+
+        return (
+            False,
+            0.0,
+            current,
+            current,
+        )
+
+    before_section = max(
+        0,
+        int(
+            boundary
+            // 1000.0
+        )
+        - 1,
+    )
+
+    before = (
+        ENVIRONMENT_INSIDE
+
+        if (
+            before_section
+            % 2
+            == 0
+        )
+
+        else ENVIRONMENT_OUTSIDE
+    )
+
+    after = (
+        ENVIRONMENT_OUTSIDE
+
+        if before
+        == ENVIRONMENT_INSIDE
+
+        else ENVIRONMENT_INSIDE
+    )
+
+    progress = (
+        (
+            distance
+            - transition_start
+        )
+        / max(
+            1.0,
+            transition_length,
+        )
+    )
 
     return (
-        projected_tunnel_position(
-            camera,
-            player_angle,
-            distance,
+        True,
 
-            radius=radius,
+        clamp(
+            progress,
+            0.0,
+            1.0,
+        ),
+
+        before,
+
+        after,
+    )
+
+
+# ============================================================
+# CAMPAIGN ENVIRONMENT
+# ============================================================
+
+def campaign_environment_for_level(
+    level_number: int,
+) -> str:
+
+    # Early levels stay inside while the player learns.
+    #
+    # Then outside-cylinder levels are introduced increasingly
+    # often through the 50-level campaign.
+
+    outside_levels = {
+        6,
+        9,
+        12,
+        14,
+        17,
+        19,
+        22,
+        24,
+        27,
+        29,
+        31,
+        33,
+        35,
+        37,
+        39,
+        41,
+        43,
+        45,
+        47,
+        49,
+    }
+
+    if (
+        int(
+            level_number
         )
+        in outside_levels
+    ):
+
+        return ENVIRONMENT_OUTSIDE
+
+    return ENVIRONMENT_INSIDE
+
+
+# ============================================================
+# CAMPAIGN MID-LEVEL SWITCH
+# ============================================================
+
+def campaign_supports_environment_switch(
+    level_number: int,
+) -> bool:
+
+    # Harder levels can actually switch environment during
+    # the level rather than staying in one view.
+
+    return (
+        level_number
+        in {
+            20,
+            25,
+            30,
+            34,
+            38,
+            40,
+            42,
+            44,
+            46,
+            48,
+            50,
+        }
+    )
+
+
+def campaign_environment_at_progress(
+    level_number: int,
+    progress: float,
+) -> str:
+
+    starting_environment = (
+        campaign_environment_for_level(
+            level_number
+        )
+    )
+
+    if not campaign_supports_environment_switch(
+        level_number
+    ):
+
+        return (
+            starting_environment
+        )
+
+    progress = clamp(
+        progress,
+        0.0,
+        1.0,
+    )
+
+    # Later challenge levels alternate more than once.
+
+    if (
+        level_number
+        >= 40
+    ):
+
+        section = int(
+            progress
+            * 4.0
+        )
+
+    elif (
+        level_number
+        >= 30
+    ):
+
+        section = int(
+            progress
+            * 3.0
+        )
+
+    else:
+
+        section = int(
+            progress
+            * 2.0
+        )
+
+    if (
+        section
+        % 2
+        == 0
+    ):
+
+        return (
+            starting_environment
+        )
+
+    return (
+        ENVIRONMENT_OUTSIDE
+
+        if starting_environment
+        == ENVIRONMENT_INSIDE
+
+        else ENVIRONMENT_INSIDE
     )
 
 
@@ -3656,77 +2803,115 @@ def projected_player_tunnel_point(
 # VALIDATION
 # ============================================================
 
-def validate_geometry(
+def validate_geometry_system(
 ) -> None:
-    if GAME_WIDTH <= 0:
+
+    inside_mesh = (
+        create_tunnel_section_mesh(
+            0.0,
+            10.0,
+
+            radius=10.0,
+
+            segments=10,
+
+            primary_colour=(
+                40,
+                100,
+                255,
+            ),
+
+            secondary_colour=(
+                10,
+                40,
+                100,
+            ),
+
+            line_colour=(
+                255,
+                255,
+                255,
+            ),
+        )
+    )
+
+    if (
+        len(
+            inside_mesh.faces
+        )
+        != 10
+    ):
+
         raise ValueError(
-            "GAME_WIDTH must be positive."
+            "Inside tunnel mesh validation failed."
         )
 
-    if GAME_HEIGHT <= 0:
-        raise ValueError(
-            "GAME_HEIGHT must be positive."
-        )
+    outside_mesh = (
+        create_outside_tunnel_section_mesh(
+            0.0,
+            10.0,
 
-    if CAMERA_NEAR_CLIP <= 0:
+            radius=10.0,
+
+            segments=10,
+
+            primary_colour=(
+                255,
+                60,
+                140,
+            ),
+
+            secondary_colour=(
+                80,
+                20,
+                120,
+            ),
+        )
+    )
+
+    if (
+        len(
+            outside_mesh.faces
+        )
+        != 10
+    ):
+
         raise ValueError(
-            "CAMERA_NEAR_CLIP must be positive."
+            "Outside tunnel mesh validation failed."
         )
 
     if (
-        CAMERA_FAR_CLIP
-        <= CAMERA_NEAR_CLIP
+        endless_environment_for_distance(
+            500.0
+        )
+        != ENVIRONMENT_INSIDE
     ):
+
         raise ValueError(
-            "Camera clipping range is invalid."
+            "Endless inside environment validation failed."
         )
 
-    if TUNNEL_RADIUS <= 0:
+    if (
+        endless_environment_for_distance(
+            1500.0
+        )
+        != ENVIRONMENT_OUTSIDE
+    ):
+
         raise ValueError(
-            "TUNNEL_RADIUS must be positive."
+            "Endless outside environment validation failed."
         )
 
-    if TUNNEL_SEGMENTS < 8:
+    if (
+        endless_environment_for_distance(
+            2500.0
+        )
+        != ENVIRONMENT_INSIDE
+    ):
+
         raise ValueError(
-            "TUNNEL_SEGMENTS must be at least 8."
-        )
-
-    test_camera = (
-        Camera3D()
-    )
-
-    test_point = Vec3(
-        0.0,
-        0.0,
-        10.0,
-    )
-
-    projected = (
-        test_camera.project(
-            test_point
-        )
-    )
-
-    if projected is None:
-        raise ValueError(
-            "3D camera failed basic projection test."
-        )
-
-    if abs(
-        projected.x
-        - GAME_CENTER_X
-    ) > 1.0:
-        raise ValueError(
-            "Camera horizontal projection is incorrect."
-        )
-
-    if abs(
-        projected.y
-        - GAME_CENTER_Y
-    ) > 1.0:
-        raise ValueError(
-            "Camera vertical projection is incorrect."
+            "Endless alternating environment validation failed."
         )
 
 
-validate_geometry()
+validate_geometry_system()

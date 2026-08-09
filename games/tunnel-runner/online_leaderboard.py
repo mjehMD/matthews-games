@@ -18,22 +18,26 @@ from config import (
 # ============================================================
 # TUNNEL RUNNER
 # ONLINE LEADERBOARD
-# VERSION 0.1.0
+# VERSION 0.2.0
 # ============================================================
 #
-# Handles:
+# FEATURES:
 #
-# - Endless Mode leaderboard
-# - Global Top 10
+# - Tunnel Runner leaderboard
+# - Reads old Orbit Runner scores
+# - Reads new Tunnel Runner scores
+# - Combines both leaderboards
+# - Keeps best score per account
 # - Personal all-time best
-# - Signed-in score submission
-# - One best score per account
-# - Automatic username use
-# - Supabase REST API
-# - Browser / Pygbag compatibility
-# - Desktop-safe fallbacks
+# - Signed-in score saving
+# - Never replaces a better score
+# - New scores save as tunnel-runner
+# - Browser / Pygbag compatible
+# - Async network requests
+# - No blocking requests during gameplay
+# - Desktop-safe fallback
 #
-# Endless Mode score = metres travelled.
+# Endless score = metres travelled.
 #
 # ============================================================
 
@@ -49,6 +53,53 @@ IS_WEB = sys.platform in (
 
 
 # ============================================================
+# GAME IDS
+# ============================================================
+
+CURRENT_GAME_NAME = (
+    LEADERBOARD_GAME_NAME
+)
+
+LEGACY_GAME_NAMES = (
+    "orbit-runner",
+)
+
+
+def leaderboard_game_names(
+) -> tuple[str, ...]:
+
+    names: list[str] = []
+
+    for name in (
+        CURRENT_GAME_NAME,
+        *LEGACY_GAME_NAMES,
+    ):
+
+        cleaned = str(
+            name
+        ).strip()
+
+        if (
+            cleaned
+            and cleaned
+            not in names
+        ):
+
+            names.append(
+                cleaned
+            )
+
+    return tuple(
+        names
+    )
+
+
+ALL_GAME_NAMES = (
+    leaderboard_game_names()
+)
+
+
+# ============================================================
 # ENDPOINT
 # ============================================================
 
@@ -56,184 +107,6 @@ SCORES_ENDPOINT = (
     f"{SUPABASE_PROJECT_URL}"
     f"/rest/v1/{SUPABASE_SCORES_TABLE}"
 )
-
-
-# ============================================================
-# CLEANING HELPERS
-# ============================================================
-
-def clean_user_id(
-    value: Any,
-) -> str:
-    return (
-        str(
-            value
-            if value is not None
-            else ""
-        )
-        .strip()
-    )
-
-
-def clean_username(
-    value: Any,
-) -> str:
-    username = (
-        str(
-            value
-            if value is not None
-            else ""
-        )
-        .strip()
-    )
-
-    if not username:
-        return "Player"
-
-    return username[:30]
-
-
-def clean_distance(
-    value: Any,
-) -> int:
-    if isinstance(
-        value,
-        bool,
-    ):
-        return 0
-
-    try:
-        distance = int(
-            round(
-                float(
-                    value
-                )
-            )
-        )
-
-    except (
-        TypeError,
-        ValueError,
-    ):
-        return 0
-
-    return max(
-        0,
-        min(
-            ENDLESS_LEADERBOARD_MAX_DISTANCE,
-            distance,
-        ),
-    )
-
-
-def clean_timestamp(
-    value: Any,
-) -> str:
-    return (
-        str(
-            value
-            if value is not None
-            else ""
-        )
-        .strip()
-    )
-
-
-# ============================================================
-# LEADERBOARD ENTRY
-# ============================================================
-
-def clean_leaderboard_entry(
-    value: Any,
-) -> dict[str, Any] | None:
-    if not isinstance(
-        value,
-        dict,
-    ):
-        return None
-
-    return {
-        "user_id": clean_user_id(
-            value.get(
-                "user_id",
-                "",
-            )
-        ),
-
-        "name": clean_username(
-            value.get(
-                "player_name",
-                "Player",
-            )
-        ),
-
-        "distance": clean_distance(
-            value.get(
-                "score",
-                0,
-            )
-        ),
-
-        "created_at": clean_timestamp(
-            value.get(
-                "created_at",
-                "",
-            )
-        ),
-    }
-
-
-def clean_leaderboard(
-    value: Any,
-) -> list[
-    dict[str, Any]
-]:
-    if not isinstance(
-        value,
-        list,
-    ):
-        return []
-
-    entries: list[
-        dict[str, Any]
-    ] = []
-
-    for raw_entry in value:
-        entry = (
-            clean_leaderboard_entry(
-                raw_entry
-            )
-        )
-
-        if entry is None:
-            continue
-
-        entries.append(
-            entry
-        )
-
-    entries.sort(
-        key=lambda entry: (
-            int(
-                entry.get(
-                    "distance",
-                    0,
-                )
-            ),
-
-            str(
-                entry.get(
-                    "created_at",
-                    "",
-                )
-            ),
-        ),
-        reverse=True,
-    )
-
-    return entries[
-        :MAX_LEADERBOARD_ENTRIES
-    ]
 
 
 # ============================================================
@@ -245,145 +118,135 @@ _BROWSER_FETCH_INSTALLED = False
 
 def install_browser_fetch_bridge(
 ) -> None:
-    global _BROWSER_FETCH_INSTALLED
 
-    if not IS_WEB:
-        return
+    global _BROWSER_FETCH_INSTALLED
 
     if _BROWSER_FETCH_INSTALLED:
         return
 
+    if not IS_WEB:
+        return
+
     try:
+
         import platform
 
         javascript = r"""
-            window.TunnelRunnerLeaderboardAPI = {
-
-                request: function* (
-                    method,
-                    url,
-                    apiKey,
-                    accessToken,
-                    bodyText,
-                    preferValue
+            (() => {
+                if (
+                    window.TunnelRunnerLeaderboardAPI
+                    && window.TunnelRunnerLeaderboardAPI.request
                 ) {
-
-                    let finished = false;
-
-                    let resultText = "";
-
-                    const token =
-                        accessToken || apiKey;
-
-                    const headers = {
-                        "apikey":
-                            apiKey,
-
-                        "Authorization":
-                            "Bearer " + token,
-
-                        "Accept":
-                            "application/json",
-
-                        "Content-Type":
-                            "application/json"
-                    };
-
-                    if (preferValue) {
-                        headers["Prefer"] =
-                            preferValue;
-                    }
-
-                    const options = {
-                        method:
-                            method,
-
-                        headers:
-                            headers
-                    };
-
-                    if (bodyText) {
-                        options.body =
-                            bodyText;
-                    }
-
-                    fetch(
-                        url,
-                        options
-                    )
-                    .then(
-                        async (
-                            response
-                        ) => {
-
-                            const text =
-                                await response.text();
-
-                            resultText =
-                                JSON.stringify({
-                                    ok:
-                                        response.ok,
-
-                                    status:
-                                        response.status,
-
-                                    text:
-                                        text
-                                });
-
-                            finished = true;
-                        }
-                    )
-                    .catch(
-                        (
-                            error
-                        ) => {
-
-                            resultText =
-                                JSON.stringify({
-                                    ok:
-                                        false,
-
-                                    status:
-                                        0,
-
-                                    text:
-                                        String(
-                                            error
-                                        )
-                                });
-
-                            finished = true;
-                        }
-                    );
-
-                    while (
-                        !finished
-                    ) {
-                        yield;
-                    }
-
-                    yield resultText;
+                    return;
                 }
-            };
+
+                window.TunnelRunnerLeaderboardAPI = {
+                    request: async function(
+                        method,
+                        url,
+                        apiKey,
+                        accessToken,
+                        bodyText,
+                        prefer
+                    ) {
+                        let finished = false;
+                        let resultText = "";
+
+                        const run = async () => {
+                            try {
+                                const headers = {
+                                    "apikey": apiKey,
+                                    "Accept": "application/json"
+                                };
+
+                                if (
+                                    accessToken
+                                    && accessToken.length > 0
+                                ) {
+                                    headers["Authorization"] =
+                                        "Bearer " + accessToken;
+                                } else {
+                                    headers["Authorization"] =
+                                        "Bearer " + apiKey;
+                                }
+
+                                if (
+                                    bodyText
+                                    && bodyText.length > 0
+                                ) {
+                                    headers["Content-Type"] =
+                                        "application/json";
+                                }
+
+                                if (
+                                    prefer
+                                    && prefer.length > 0
+                                ) {
+                                    headers["Prefer"] = prefer;
+                                }
+
+                                const options = {
+                                    method: method,
+                                    headers: headers
+                                };
+
+                                if (
+                                    bodyText
+                                    && bodyText.length > 0
+                                    && method !== "GET"
+                                    && method !== "HEAD"
+                                ) {
+                                    options.body = bodyText;
+                                }
+
+                                const response = await fetch(
+                                    url,
+                                    options
+                                );
+
+                                const text = await response.text();
+
+                                resultText = JSON.stringify({
+                                    ok: response.ok,
+                                    status: response.status,
+                                    text: text
+                                });
+                            } catch (error) {
+                                resultText = JSON.stringify({
+                                    ok: false,
+                                    status: 0,
+                                    text: String(error)
+                                });
+                            }
+
+                            finished = true;
+                        };
+
+                        run();
+
+                        while (!finished) {
+                            yield;
+                        }
+
+                        yield resultText;
+                    }
+                };
+            })();
         """
 
         platform.window.eval(
             javascript
         )
 
-        _BROWSER_FETCH_INSTALLED = (
-            True
-        )
+        _BROWSER_FETCH_INSTALLED = True
 
     except Exception:
-        _BROWSER_FETCH_INSTALLED = (
-            False
-        )
+
+        _BROWSER_FETCH_INSTALLED = False
 
 
 # ============================================================
-# BROWSER REQUEST
+# NETWORK REQUEST
 # ============================================================
 
 async def browser_request(
@@ -398,7 +261,9 @@ async def browser_request(
     int,
     str,
 ]:
+
     if not IS_WEB:
+
         return (
             False,
             0,
@@ -412,6 +277,7 @@ async def browser_request(
     install_browser_fetch_bridge()
 
     if not _BROWSER_FETCH_INSTALLED:
+
         return (
             False,
             0,
@@ -424,7 +290,9 @@ async def browser_request(
     body_text = ""
 
     if body is not None:
+
         try:
+
             body_text = json.dumps(
                 body
             )
@@ -433,28 +301,23 @@ async def browser_request(
             TypeError,
             ValueError,
         ):
+
             body_text = ""
 
     try:
+
         import platform
 
-        raw_result = (
-            await platform.jsiter(
-                platform.window
-                .TunnelRunnerLeaderboardAPI
-                .request(
-                    method.upper(),
-
-                    url,
-
-                    SUPABASE_PUBLISHABLE_KEY,
-
-                    access_token,
-
-                    body_text,
-
-                    prefer,
-                )
+        raw_result = await platform.jsiter(
+            platform.window
+            .TunnelRunnerLeaderboardAPI
+            .request(
+                method.upper(),
+                url,
+                SUPABASE_PUBLISHABLE_KEY,
+                access_token,
+                body_text,
+                prefer,
             )
         )
 
@@ -488,6 +351,7 @@ async def browser_request(
         )
 
     except Exception as error:
+
         return (
             False,
             0,
@@ -498,676 +362,212 @@ async def browser_request(
 
 
 # ============================================================
-# LOAD GLOBAL LEADERBOARD
+# CLEANING
 # ============================================================
 
-async def load_global_leaderboard(
-) -> tuple[
-    list[
-        dict[str, Any]
-    ],
-    str,
-]:
-    if not IS_WEB:
-        return (
-            [],
-            (
-                "The global leaderboard "
-                "is available on the website."
-            ),
-        )
-
-    query = urllib.parse.urlencode(
-        {
-            "select": (
-                "user_id,"
-                "player_name,"
-                "score,"
-                "created_at"
-            ),
-
-            "game": (
-                f"eq.{LEADERBOARD_GAME_NAME}"
-            ),
-
-            "order": (
-                "score.desc,"
-                "created_at.asc"
-            ),
-
-            "limit": (
-                MAX_LEADERBOARD_ENTRIES
-            ),
-        }
-    )
-
-    (
-        success,
-        status,
-        response_text,
-    ) = await browser_request(
-        "GET",
-
-        (
-            f"{SCORES_ENDPOINT}"
-            f"?{query}"
-        ),
-    )
-
-    if not success:
-        return (
-            [],
-            (
-                "Could not load "
-                "the leaderboard "
-                f"({status})."
-            ),
-        )
-
-    try:
-        raw_data = json.loads(
-            response_text
-        )
-
-    except json.JSONDecodeError:
-        return (
-            [],
-            (
-                "The leaderboard "
-                "returned invalid data."
-            ),
-        )
+def clean_user_id(
+    value: Any,
+) -> str:
 
     return (
-        clean_leaderboard(
-            raw_data
-        ),
-
-        "Leaderboard loaded.",
+        str(
+            value
+            if value is not None
+            else ""
+        )
+        .strip()
     )
 
 
-# ============================================================
-# LOAD PERSONAL BEST
-# ============================================================
+def clean_username(
+    value: Any,
+) -> str:
 
-async def load_personal_best(
-    user_id: str,
-    access_token: str,
-) -> tuple[
-    int,
-    str,
-]:
-    cleaned_user_id = (
-        clean_user_id(
-            user_id
+    username = (
+        str(
+            value
+            if value is not None
+            else ""
         )
+        .strip()
     )
 
-    if not cleaned_user_id:
-        return (
-            0,
-            "Missing user ID.",
+    if not username:
+
+        return "Player"
+
+    return username[
+        :30
+    ]
+
+
+def clean_game_name(
+    value: Any,
+) -> str:
+
+    return (
+        str(
+            value
+            if value is not None
+            else ""
         )
-
-    if not IS_WEB:
-        return (
-            0,
-            (
-                "Online personal best "
-                "is available on the website."
-            ),
-        )
-
-    if not access_token:
-        return (
-            0,
-            (
-                "A signed-in account "
-                "is required."
-            ),
-        )
-
-    query = urllib.parse.urlencode(
-        {
-            "select": (
-                "score,"
-                "created_at"
-            ),
-
-            "game": (
-                f"eq.{LEADERBOARD_GAME_NAME}"
-            ),
-
-            "user_id": (
-                f"eq.{cleaned_user_id}"
-            ),
-
-            "order": (
-                "score.desc"
-            ),
-
-            "limit": 1,
-        }
+        .strip()
     )
 
-    (
-        success,
-        status,
-        response_text,
-    ) = await browser_request(
-        "GET",
 
-        (
-            f"{SCORES_ENDPOINT}"
-            f"?{query}"
-        ),
+def clean_distance(
+    value: Any,
+) -> int:
 
-        access_token=(
-            access_token
-        ),
-    )
+    if isinstance(
+        value,
+        bool,
+    ):
 
-    if not success:
-        return (
-            0,
-            (
-                "Could not load "
-                "your personal best "
-                f"({status})."
-            ),
-        )
+        return 0
 
     try:
-        rows = json.loads(
-            response_text
+
+        distance = int(
+            round(
+                float(
+                    value
+                )
+            )
         )
 
-    except json.JSONDecodeError:
-        return (
-            0,
-            (
-                "Personal best "
-                "returned invalid data."
-            ),
-        )
-
-    if (
-        not isinstance(
-            rows,
-            list,
-        )
-        or not rows
+    except (
+        TypeError,
+        ValueError,
     ):
-        return (
-            0,
-            (
-                "You have not submitted "
-                "an Endless run yet."
-            ),
-        )
 
-    first_row = rows[0]
+        return 0
+
+    return max(
+        0,
+
+        min(
+            ENDLESS_LEADERBOARD_MAX_DISTANCE,
+            distance,
+        ),
+    )
+
+
+def clean_timestamp(
+    value: Any,
+) -> str:
+
+    return (
+        str(
+            value
+            if value is not None
+            else ""
+        )
+        .strip()
+    )
+
+
+# ============================================================
+# ENTRY CLEANING
+# ============================================================
+
+def clean_leaderboard_entry(
+    value: Any,
+) -> dict[str, Any] | None:
 
     if not isinstance(
-        first_row,
+        value,
         dict,
     ):
-        return (
-            0,
-            (
-                "Invalid personal "
-                "best data."
-            ),
-        )
 
-    distance = clean_distance(
-        first_row.get(
-            "score",
-            0,
-        )
-    )
-
-    return (
-        distance,
-
-        (
-            "Personal best: "
-            f"{distance:,} m"
-        ),
-    )
-
-
-# ============================================================
-# LOAD CURRENT SCORE ROW
-# ============================================================
-
-async def load_current_score_row(
-    user_id: str,
-    access_token: str,
-) -> tuple[
-    dict[str, Any] | None,
-    str,
-]:
-    cleaned_user_id = (
-        clean_user_id(
-            user_id
-        )
-    )
-
-    if not cleaned_user_id:
-        return (
-            None,
-            "Missing user ID.",
-        )
-
-    if not IS_WEB:
-        return (
-            None,
-            (
-                "Online score checking "
-                "is only available on the website."
-            ),
-        )
-
-    if not access_token:
-        return (
-            None,
-            (
-                "A signed-in account "
-                "is required."
-            ),
-        )
-
-    query = urllib.parse.urlencode(
-        {
-            "select": (
-                "user_id,"
-                "player_name,"
-                "score,"
-                "created_at"
-            ),
-
-            "game": (
-                f"eq.{LEADERBOARD_GAME_NAME}"
-            ),
-
-            "user_id": (
-                f"eq.{cleaned_user_id}"
-            ),
-
-            "limit": 1,
-        }
-    )
-
-    (
-        success,
-        status,
-        response_text,
-    ) = await browser_request(
-        "GET",
-
-        (
-            f"{SCORES_ENDPOINT}"
-            f"?{query}"
-        ),
-
-        access_token=(
-            access_token
-        ),
-    )
-
-    if not success:
-        return (
-            None,
-            (
-                "Could not check "
-                "your current score "
-                f"({status})."
-            ),
-        )
-
-    try:
-        rows = json.loads(
-            response_text
-        )
-
-    except json.JSONDecodeError:
-        return (
-            None,
-            (
-                "Current score "
-                "returned invalid data."
-            ),
-        )
-
-    if (
-        not isinstance(
-            rows,
-            list,
-        )
-        or not rows
-    ):
-        return (
-            None,
-            (
-                "No current "
-                "score row."
-            ),
-        )
-
-    entry = (
-        clean_leaderboard_entry(
-            rows[0]
-        )
-    )
-
-    return (
-        entry,
-        "Current score loaded.",
-    )
-
-
-# ============================================================
-# SUBMIT ENDLESS DISTANCE
-# ============================================================
-
-async def submit_endless_distance(
-    player_name: str,
-    distance_metres: float,
-    user_id: str,
-    access_token: str,
-) -> tuple[
-    bool,
-    str,
-    int,
-    bool,
-]:
-    """
-    Returns:
-
-        success
-        message
-        stored_best
-        new_personal_best
-    """
-
-    cleaned_name = clean_username(
-        player_name
-    )
-
-    cleaned_user_id = (
-        clean_user_id(
-            user_id
-        )
-    )
-
-    cleaned_distance = (
-        clean_distance(
-            distance_metres
-        )
-    )
-
-    if not cleaned_user_id:
-        return (
-            False,
-            "Missing user ID.",
-            0,
-            False,
-        )
-
-    if not access_token:
-        return (
-            False,
-            (
-                "A signed-in account "
-                "is required to submit scores."
-            ),
-            0,
-            False,
-        )
-
-    if not IS_WEB:
-        return (
-            False,
-            (
-                "Scores are only uploaded "
-                "from the website version."
-            ),
-            0,
-            False,
-        )
-
-    # ========================================================
-    # CHECK EXISTING BEST
-    # ========================================================
-
-    (
-        existing_row,
-        _message,
-    ) = await load_current_score_row(
-        cleaned_user_id,
-        access_token,
-    )
-
-    existing_distance = 0
-
-    if existing_row is not None:
-        existing_distance = (
-            clean_distance(
-                existing_row.get(
-                    "distance",
-                    0,
-                )
-            )
-        )
-
-    # ========================================================
-    # DO NOT REPLACE A BETTER SCORE
-    # ========================================================
-
-    if (
-        existing_distance
-        >= cleaned_distance
-    ):
-        return (
-            True,
-
-            (
-                "Your best remains "
-                f"{existing_distance:,} m."
-            ),
-
-            existing_distance,
-
-            False,
-        )
-
-    # ========================================================
-    # SCORE PAYLOAD
-    # ========================================================
-
-    payload = {
-        "game": (
-            LEADERBOARD_GAME_NAME
-        ),
-
-        "user_id": (
-            cleaned_user_id
-        ),
-
-        "player_name": (
-            cleaned_name
-        ),
-
-        "score": (
-            cleaned_distance
-        ),
-
-        # Shared score-table compatibility fields.
-        "wave": 1,
-
-        "difficulty": (
-            "Endless"
-        ),
-
-        "kills": 0,
-    }
-
-    # ========================================================
-    # UPDATE EXISTING ROW
-    # ========================================================
-
-    if existing_row is not None:
-        query = urllib.parse.urlencode(
-            {
-                "game": (
-                    f"eq.{LEADERBOARD_GAME_NAME}"
-                ),
-
-                "user_id": (
-                    f"eq.{cleaned_user_id}"
-                ),
-            }
-        )
-
-        (
-            success,
-            status,
-            response_text,
-        ) = await browser_request(
-            "PATCH",
-
-            (
-                f"{SCORES_ENDPOINT}"
-                f"?{query}"
-            ),
-
-            access_token=(
-                access_token
-            ),
-
-            body=payload,
-
-            prefer=(
-                "return=minimal"
-            ),
-        )
-
-    # ========================================================
-    # CREATE NEW ROW
-    # ========================================================
-
-    else:
-        (
-            success,
-            status,
-            response_text,
-        ) = await browser_request(
-            "POST",
-
-            SCORES_ENDPOINT,
-
-            access_token=(
-                access_token
-            ),
-
-            body=payload,
-
-            prefer=(
-                "return=minimal"
-            ),
-        )
-
-    # ========================================================
-    # SUCCESS
-    # ========================================================
-
-    if (
-        success
-        and status
-        in (
-            200,
-            201,
-            204,
-        )
-    ):
-        return (
-            True,
-
-            (
-                "New online best: "
-                f"{cleaned_distance:,} m"
-            ),
-
-            cleaned_distance,
-
-            True,
-        )
-
-    # ========================================================
-    # FAILURE
-    # ========================================================
-
-    error_text = (
-        response_text.strip()
-        or "Unknown leaderboard error."
-    )
-
-    return (
-        False,
-
-        (
-            "Could not save "
-            "your score "
-            f"({status}): "
-            f"{error_text}"
-        ),
-
-        existing_distance,
-
-        False,
-    )
-
-
-# ============================================================
-# RANK
-# ============================================================
-
-def get_player_rank(
-    leaderboard: list[
-        dict[str, Any]
-    ],
-    user_id: str,
-) -> int | None:
-    cleaned_user_id = (
-        clean_user_id(
-            user_id
-        )
-    )
-
-    if not cleaned_user_id:
         return None
 
-    for (
-        rank,
-        entry,
-    ) in enumerate(
-        leaderboard,
-        start=1,
-    ):
-        if (
-            clean_user_id(
-                entry.get(
-                    "user_id",
-                    "",
-                )
+    return {
+        "game": clean_game_name(
+            value.get(
+                "game",
+                "",
             )
-            == cleaned_user_id
-        ):
-            return rank
+        ),
 
-    return None
+        "user_id": clean_user_id(
+            value.get(
+                "user_id",
+                "",
+            )
+        ),
+
+        "name": clean_username(
+            value.get(
+                "player_name",
+                value.get(
+                    "name",
+                    "Player",
+                ),
+            )
+        ),
+
+        "distance": clean_distance(
+            value.get(
+                "score",
+                value.get(
+                    "distance",
+                    0,
+                ),
+            )
+        ),
+
+        "created_at": clean_timestamp(
+            value.get(
+                "created_at",
+                "",
+            )
+        ),
+    }
+
+
+def clean_leaderboard(
+    value: Any,
+) -> list[
+    dict[str, Any]
+]:
+
+    if not isinstance(
+        value,
+        list,
+    ):
+
+        return []
+
+    entries: list[
+        dict[str, Any]
+    ] = []
+
+    for raw_entry in value:
+
+        entry = (
+            clean_leaderboard_entry(
+                raw_entry
+            )
+        )
+
+        if entry is None:
+            continue
+
+        entries.append(
+            entry
+        )
+
+    entries.sort(
+        key=lambda entry: (
+            leaderboard_entry_distance(
+                entry
+            )
+        ),
+        reverse=True,
+    )
+
+    return entries
 
 
 # ============================================================
@@ -1177,6 +577,7 @@ def get_player_rank(
 def format_leaderboard_distance(
     value: Any,
 ) -> str:
+
     distance = clean_distance(
         value
     )
@@ -1189,10 +590,14 @@ def format_leaderboard_distance(
 def leaderboard_entry_name(
     entry: dict[str, Any],
 ) -> str:
+
     return clean_username(
         entry.get(
             "name",
-            "Player",
+            entry.get(
+                "player_name",
+                "Player",
+            ),
         )
     )
 
@@ -1200,16 +605,20 @@ def leaderboard_entry_name(
 def leaderboard_entry_distance(
     entry: dict[str, Any],
 ) -> int:
+
     return clean_distance(
         entry.get(
             "distance",
-            0,
+            entry.get(
+                "score",
+                0,
+            ),
         )
     )
 
 
 # ============================================================
-# DUPLICATE USER SCORE CLEANER
+# BEST SCORE PER PLAYER
 # ============================================================
 
 def keep_best_score_per_user(
@@ -1219,12 +628,6 @@ def keep_best_score_per_user(
 ) -> list[
     dict[str, Any]
 ]:
-    """
-    Defensive helper.
-
-    If the database ever contains multiple Tunnel Runner rows
-    for the same account, only keep that account's best result.
-    """
 
     best_by_user: dict[
         str,
@@ -1236,6 +639,7 @@ def keep_best_score_per_user(
     ] = []
 
     for entry in entries:
+
         user_id = clean_user_id(
             entry.get(
                 "user_id",
@@ -1244,6 +648,7 @@ def keep_best_score_per_user(
         )
 
         if not user_id:
+
             anonymous_entries.append(
                 entry
             )
@@ -1257,6 +662,7 @@ def keep_best_score_per_user(
         )
 
         if current is None:
+
             best_by_user[
                 user_id
             ] = entry
@@ -1279,9 +685,44 @@ def keep_best_score_per_user(
             new_distance
             > current_distance
         ):
+
             best_by_user[
                 user_id
             ] = entry
+
+        elif (
+            new_distance
+            == current_distance
+        ):
+
+            # Prefer the new Tunnel Runner row if both
+            # game names contain the same score.
+
+            current_game = clean_game_name(
+                current.get(
+                    "game",
+                    "",
+                )
+            )
+
+            new_game = clean_game_name(
+                entry.get(
+                    "game",
+                    "",
+                )
+            )
+
+            if (
+                current_game
+                != CURRENT_GAME_NAME
+
+                and new_game
+                == CURRENT_GAME_NAME
+            ):
+
+                best_by_user[
+                    user_id
+                ] = entry
 
     result = (
         list(
@@ -1305,32 +746,914 @@ def keep_best_score_per_user(
 
 
 # ============================================================
-# VALIDATION
+# PLAYER RANK
+# ============================================================
+
+def get_player_rank(
+    entries: list[
+        dict[str, Any]
+    ],
+    user_id: str,
+) -> int | None:
+
+    cleaned_user_id = (
+        clean_user_id(
+            user_id
+        )
+    )
+
+    if not cleaned_user_id:
+
+        return None
+
+    cleaned_entries = (
+        keep_best_score_per_user(
+            entries
+        )
+    )
+
+    for index, entry in enumerate(
+        cleaned_entries
+    ):
+
+        if (
+            clean_user_id(
+                entry.get(
+                    "user_id",
+                    "",
+                )
+            )
+            == cleaned_user_id
+        ):
+
+            return (
+                index + 1
+            )
+
+    return None
+
+
+# ============================================================
+# POSTGREST GAME FILTER
+# ============================================================
+
+def game_filter_value(
+) -> str:
+
+    if (
+        len(
+            ALL_GAME_NAMES
+        )
+        == 1
+    ):
+
+        return (
+            f"eq.{ALL_GAME_NAMES[0]}"
+        )
+
+    joined = ",".join(
+        ALL_GAME_NAMES
+    )
+
+    return (
+        f"in.({joined})"
+    )
+
+
+# ============================================================
+# LOAD GLOBAL LEADERBOARD
+# ============================================================
+
+async def load_global_leaderboard(
+) -> tuple[
+    list[
+        dict[str, Any]
+    ],
+    str,
+]:
+
+    if not IS_WEB:
+
+        return (
+            [],
+            (
+                "The global leaderboard "
+                "is available on the website."
+            ),
+        )
+
+    # Ask Supabase for both:
+    #
+    # tunnel-runner
+    # orbit-runner
+    #
+    # in one request.
+
+    request_limit = max(
+        MAX_LEADERBOARD_ENTRIES
+        * max(
+            2,
+            len(
+                ALL_GAME_NAMES
+            ),
+        )
+        * 3,
+
+        30,
+    )
+
+    query = urllib.parse.urlencode(
+        {
+            "select": (
+                "game,"
+                "user_id,"
+                "player_name,"
+                "score,"
+                "created_at"
+            ),
+
+            "game": (
+                game_filter_value()
+            ),
+
+            "order": (
+                "score.desc,"
+                "created_at.asc"
+            ),
+
+            "limit": (
+                request_limit
+            ),
+        }
+    )
+
+    (
+        success,
+        status,
+        response_text,
+    ) = await browser_request(
+        "GET",
+
+        (
+            f"{SCORES_ENDPOINT}"
+            f"?{query}"
+        ),
+    )
+
+    if not success:
+
+        return (
+            [],
+            (
+                "Could not load "
+                "the leaderboard "
+                f"({status})."
+            ),
+        )
+
+    try:
+
+        raw_data = json.loads(
+            response_text
+        )
+
+    except json.JSONDecodeError:
+
+        return (
+            [],
+            (
+                "The leaderboard "
+                "returned invalid data."
+            ),
+        )
+
+    entries = (
+        clean_leaderboard(
+            raw_data
+        )
+    )
+
+    entries = (
+        keep_best_score_per_user(
+            entries
+        )
+    )
+
+    if not entries:
+
+        return (
+            [],
+            "No leaderboard scores yet.",
+        )
+
+    return (
+        entries,
+        "Leaderboard loaded.",
+    )
+
+
+# ============================================================
+# LOAD ALL USER ROWS
+# ============================================================
+
+async def load_user_score_rows(
+    user_id: str,
+    access_token: str,
+) -> tuple[
+    list[
+        dict[str, Any]
+    ],
+    str,
+]:
+
+    cleaned_user_id = (
+        clean_user_id(
+            user_id
+        )
+    )
+
+    if not cleaned_user_id:
+
+        return (
+            [],
+            "Missing user ID.",
+        )
+
+    if not IS_WEB:
+
+        return (
+            [],
+            (
+                "Online scores are only "
+                "available on the website."
+            ),
+        )
+
+    if not access_token:
+
+        return (
+            [],
+            (
+                "A signed-in account "
+                "is required."
+            ),
+        )
+
+    query = urllib.parse.urlencode(
+        {
+            "select": (
+                "game,"
+                "user_id,"
+                "player_name,"
+                "score,"
+                "created_at"
+            ),
+
+            "game": (
+                game_filter_value()
+            ),
+
+            "user_id": (
+                f"eq.{cleaned_user_id}"
+            ),
+
+            "order": (
+                "score.desc,"
+                "created_at.asc"
+            ),
+
+            "limit": 20,
+        }
+    )
+
+    (
+        success,
+        status,
+        response_text,
+    ) = await browser_request(
+        "GET",
+
+        (
+            f"{SCORES_ENDPOINT}"
+            f"?{query}"
+        ),
+
+        access_token=(
+            access_token
+        ),
+    )
+
+    if not success:
+
+        return (
+            [],
+            (
+                "Could not load "
+                "your saved scores "
+                f"({status})."
+            ),
+        )
+
+    try:
+
+        raw_data = json.loads(
+            response_text
+        )
+
+    except json.JSONDecodeError:
+
+        return (
+            [],
+            (
+                "Saved scores returned "
+                "invalid data."
+            ),
+        )
+
+    return (
+        clean_leaderboard(
+            raw_data
+        ),
+        "Saved scores loaded.",
+    )
+
+
+# ============================================================
+# LOAD PERSONAL BEST
+# ============================================================
+
+async def load_personal_best(
+    user_id: str,
+    access_token: str,
+) -> tuple[
+    int,
+    str,
+]:
+
+    rows, message = (
+        await load_user_score_rows(
+            user_id,
+            access_token,
+        )
+    )
+
+    if not rows:
+
+        return (
+            0,
+            message,
+        )
+
+    best_distance = max(
+        (
+            leaderboard_entry_distance(
+                entry
+            )
+
+            for entry
+            in rows
+        ),
+        default=0,
+    )
+
+    return (
+        best_distance,
+        (
+            "Personal best loaded: "
+            f"{best_distance:,} m."
+        ),
+    )
+
+
+# ============================================================
+# CURRENT GAME ROW
+# ============================================================
+
+def current_game_row(
+    entries: list[
+        dict[str, Any]
+    ],
+) -> dict[str, Any] | None:
+
+    current_rows = [
+        entry
+
+        for entry
+        in entries
+
+        if (
+            clean_game_name(
+                entry.get(
+                    "game",
+                    "",
+                )
+            )
+            == CURRENT_GAME_NAME
+        )
+    ]
+
+    if not current_rows:
+
+        return None
+
+    current_rows.sort(
+        key=lambda entry: (
+            leaderboard_entry_distance(
+                entry
+            )
+        ),
+        reverse=True,
+    )
+
+    return current_rows[0]
+
+
+# ============================================================
+# BEST ROW
+# ============================================================
+
+def best_score_row(
+    entries: list[
+        dict[str, Any]
+    ],
+) -> dict[str, Any] | None:
+
+    if not entries:
+
+        return None
+
+    return max(
+        entries,
+        key=lambda entry: (
+            leaderboard_entry_distance(
+                entry
+            )
+        ),
+    )
+
+
+# ============================================================
+# LOAD CURRENT SCORE ROW
+# ============================================================
+#
+# Kept for compatibility with older main.py versions.
+#
+
+async def load_current_score_row(
+    user_id: str,
+    access_token: str,
+) -> tuple[
+    dict[str, Any] | None,
+    str,
+]:
+
+    rows, message = (
+        await load_user_score_rows(
+            user_id,
+            access_token,
+        )
+    )
+
+    if not rows:
+
+        return (
+            None,
+            message,
+        )
+
+    row = (
+        best_score_row(
+            rows
+        )
+    )
+
+    if row is None:
+
+        return (
+            None,
+            "No current score row.",
+        )
+
+    return (
+        row,
+        "Current score loaded.",
+    )
+
+
+# ============================================================
+# UPDATE CURRENT TUNNEL RUNNER ROW
+# ============================================================
+
+async def update_current_game_score(
+    *,
+    user_id: str,
+    access_token: str,
+    payload: dict[str, Any],
+) -> tuple[
+    bool,
+    int,
+    str,
+]:
+
+    query = urllib.parse.urlencode(
+        {
+            "game": (
+                f"eq.{CURRENT_GAME_NAME}"
+            ),
+
+            "user_id": (
+                f"eq.{user_id}"
+            ),
+        }
+    )
+
+    return await browser_request(
+        "PATCH",
+
+        (
+            f"{SCORES_ENDPOINT}"
+            f"?{query}"
+        ),
+
+        access_token=(
+            access_token
+        ),
+
+        body=payload,
+
+        prefer=(
+            "return=minimal"
+        ),
+    )
+
+
+# ============================================================
+# INSERT NEW TUNNEL RUNNER ROW
+# ============================================================
+
+async def insert_current_game_score(
+    *,
+    access_token: str,
+    payload: dict[str, Any],
+) -> tuple[
+    bool,
+    int,
+    str,
+]:
+
+    return await browser_request(
+        "POST",
+
+        SCORES_ENDPOINT,
+
+        access_token=(
+            access_token
+        ),
+
+        body=payload,
+
+        prefer=(
+            "return=minimal"
+        ),
+    )
+
+
+# ============================================================
+# SUBMIT ENDLESS SCORE
+# ============================================================
+
+async def submit_endless_distance(
+    player_name: str,
+    distance_metres: float,
+    user_id: str,
+    access_token: str,
+) -> tuple[
+    bool,
+    str,
+    int,
+    bool,
+]:
+
+    cleaned_name = (
+        clean_username(
+            player_name
+        )
+    )
+
+    cleaned_user_id = (
+        clean_user_id(
+            user_id
+        )
+    )
+
+    cleaned_distance = (
+        clean_distance(
+            distance_metres
+        )
+    )
+
+    if not cleaned_user_id:
+
+        return (
+            False,
+            "Missing user ID.",
+            0,
+            False,
+        )
+
+    if not access_token:
+
+        return (
+            False,
+            (
+                "A signed-in account "
+                "is required to submit scores."
+            ),
+            0,
+            False,
+        )
+
+    if not IS_WEB:
+
+        return (
+            False,
+            (
+                "Scores are only uploaded "
+                "from the website version."
+            ),
+            0,
+            False,
+        )
+
+    # ========================================================
+    # LOAD ALL EXISTING SCORES
+    # ========================================================
+
+    existing_rows, _message = (
+        await load_user_score_rows(
+            cleaned_user_id,
+            access_token,
+        )
+    )
+
+    best_existing_row = (
+        best_score_row(
+            existing_rows
+        )
+    )
+
+    existing_best = 0
+
+    if best_existing_row is not None:
+
+        existing_best = (
+            leaderboard_entry_distance(
+                best_existing_row
+            )
+        )
+
+    # ========================================================
+    # DON'T REPLACE A BETTER OLD OR NEW SCORE
+    # ========================================================
+
+    if (
+        existing_best
+        >= cleaned_distance
+    ):
+
+        return (
+            True,
+
+            (
+                "Your best remains "
+                f"{existing_best:,} m."
+            ),
+
+            existing_best,
+
+            False,
+        )
+
+    # ========================================================
+    # NEW TUNNEL RUNNER PAYLOAD
+    # ========================================================
+
+    payload = {
+        "game": (
+            CURRENT_GAME_NAME
+        ),
+
+        "user_id": (
+            cleaned_user_id
+        ),
+
+        "player_name": (
+            cleaned_name
+        ),
+
+        "score": (
+            cleaned_distance
+        ),
+
+        # Compatibility with the shared Matthews Games
+        # Supabase score table.
+
+        "wave": 1,
+
+        "difficulty": (
+            "Endless"
+        ),
+
+        "kills": 0,
+    }
+
+    # ========================================================
+    # CHECK IF A NEW-NAME ROW ALREADY EXISTS
+    # ========================================================
+
+    existing_current_row = (
+        current_game_row(
+            existing_rows
+        )
+    )
+
+    # ========================================================
+    # UPDATE TUNNEL-RUNNER ROW
+    # ========================================================
+
+    if existing_current_row is not None:
+
+        (
+            success,
+            status,
+            response_text,
+        ) = await update_current_game_score(
+            user_id=(
+                cleaned_user_id
+            ),
+
+            access_token=(
+                access_token
+            ),
+
+            payload=payload,
+        )
+
+        if not success:
+
+            return (
+                False,
+
+                (
+                    "Could not update "
+                    "your score "
+                    f"({status}). "
+                    f"{response_text[:100]}"
+                ),
+
+                existing_best,
+
+                False,
+            )
+
+    # ========================================================
+    # CREATE TUNNEL-RUNNER ROW
+    # ========================================================
+    #
+    # If the only old score was orbit-runner, we create a
+    # new tunnel-runner entry instead of modifying history.
+    #
+
+    else:
+
+        (
+            success,
+            status,
+            response_text,
+        ) = await insert_current_game_score(
+            access_token=(
+                access_token
+            ),
+
+            payload=payload,
+        )
+
+        if not success:
+
+            # ------------------------------------------------
+            # DUPLICATE FALLBACK
+            # ------------------------------------------------
+            #
+            # If Supabase already has a tunnel-runner row but
+            # it wasn't returned for some reason, attempt PATCH.
+            #
+
+            if status in (
+                400,
+                409,
+            ):
+
+                (
+                    retry_success,
+                    retry_status,
+                    retry_text,
+                ) = await update_current_game_score(
+                    user_id=(
+                        cleaned_user_id
+                    ),
+
+                    access_token=(
+                        access_token
+                    ),
+
+                    payload=payload,
+                )
+
+                if not retry_success:
+
+                    return (
+                        False,
+
+                        (
+                            "Could not save "
+                            "your score "
+                            f"({retry_status}). "
+                            f"{retry_text[:100]}"
+                        ),
+
+                        existing_best,
+
+                        False,
+                    )
+
+            else:
+
+                return (
+                    False,
+
+                    (
+                        "Could not save "
+                        "your score "
+                        f"({status}). "
+                        f"{response_text[:100]}"
+                    ),
+
+                    existing_best,
+
+                    False,
+                )
+
+    # ========================================================
+    # SUCCESS
+    # ========================================================
+
+    return (
+        True,
+
+        (
+            "New personal best: "
+            f"{cleaned_distance:,} m!"
+        ),
+
+        cleaned_distance,
+
+        True,
+    )
+
+
+# ============================================================
+# CONFIG VALIDATION
 # ============================================================
 
 def validate_leaderboard_config(
 ) -> None:
+
     if not SUPABASE_PROJECT_URL:
+
         raise ValueError(
             "SUPABASE_PROJECT_URL is empty."
         )
 
     if not SUPABASE_PUBLISHABLE_KEY:
+
         raise ValueError(
             "SUPABASE_PUBLISHABLE_KEY is empty."
         )
 
     if not SUPABASE_SCORES_TABLE:
+
         raise ValueError(
             "SUPABASE_SCORES_TABLE is empty."
         )
 
     if not LEADERBOARD_GAME_NAME:
+
         raise ValueError(
-            LEADERBOARD_GAME_NAME = "tunnel-runner"
+            "LEADERBOARD_GAME_NAME is empty."
         )
 
     if MAX_LEADERBOARD_ENTRIES <= 0:
+
         raise ValueError(
             (
                 "MAX_LEADERBOARD_ENTRIES "
@@ -1339,6 +1662,7 @@ def validate_leaderboard_config(
         )
 
     if ENDLESS_LEADERBOARD_MAX_DISTANCE <= 0:
+
         raise ValueError(
             (
                 "ENDLESS_LEADERBOARD_MAX_DISTANCE "

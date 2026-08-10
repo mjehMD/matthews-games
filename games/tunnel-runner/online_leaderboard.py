@@ -18,7 +18,7 @@ from config import (
 # ============================================================
 # TUNNEL RUNNER
 # ONLINE LEADERBOARD
-# VERSION 0.2.0
+# VERSION 0.2.1 - PYGBAG FETCH BRIDGE FIX
 # ============================================================
 #
 # FEATURES:
@@ -141,7 +141,7 @@ def install_browser_fetch_bridge(
                 }
 
                 window.TunnelRunnerLeaderboardAPI = {
-                    request: async function(
+                    request: async function*(
                         method,
                         url,
                         apiKey,
@@ -215,7 +215,9 @@ def install_browser_fetch_bridge(
                                 resultText = JSON.stringify({
                                     ok: false,
                                     status: 0,
-                                    text: String(error)
+                                    text:
+                                        "Browser fetch failed: "
+                                        + String(error)
                                 });
                             }
 

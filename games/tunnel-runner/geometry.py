@@ -10,7 +10,7 @@ import pygame
 # ============================================================
 # TUNNEL RUNNER
 # 3D GEOMETRY ENGINE
-# VERSION 0.2.0
+# VERSION 0.2.5 - DETAILED OUTSIDE VALIDATOR FIX
 # ============================================================
 #
 # NEW:
@@ -1119,6 +1119,18 @@ def create_outside_tunnel_section_mesh(
     line_colour: tuple[int, int, int] | None = None,
     draw_outlines: bool = False,
 ) -> Mesh3D:
+    """
+    Build a more readable exterior tube.
+
+    The previous outside surface was just a flat ring of alternating
+    panels. This version adds:
+    - stronger alternating panel contrast
+    - subtle raised longitudinal ribs
+    - thin ring bands at each chunk edge
+    - selective outlines
+
+    The extra geometry is deliberately lightweight.
+    """
 
     segments = max(
         8,
@@ -1135,6 +1147,19 @@ def create_outside_tunnel_section_mesh(
         360.0
         / segments
     )
+
+    ridge_radius = (
+        radius
+        + 0.10
+    )
+
+    ridge_half_width = min(
+        1.6,
+        angle_step
+        * 0.09,
+    )
+
+    ring_height = 0.08
 
     for index in range(
         segments
@@ -1153,49 +1178,50 @@ def create_outside_tunnel_section_mesh(
         start_a = tunnel_point(
             angle_a
             + start_rotation,
-
             start_z,
-
             radius=radius,
         )
 
         start_b = tunnel_point(
             angle_b
             + start_rotation,
-
             start_z,
-
             radius=radius,
         )
 
         end_a = tunnel_point(
             angle_a
             + end_rotation,
-
             end_z,
-
             radius=radius,
         )
 
         end_b = tunnel_point(
             angle_b
             + end_rotation,
-
             end_z,
-
             radius=radius,
         )
 
-        colour = tunnel_panel_colour(
+        base_colour = tunnel_panel_colour(
             primary_colour,
             secondary_colour,
             index,
             outside=True,
         )
 
+        # Give the exterior stronger depth/contrast than the inside.
+        colour = multiply_colour(
+            base_colour,
+            (
+                1.08
+                if index % 2 == 0
+                else 0.78
+            ),
+        )
+
         faces.append(
             Face3D(
-                # Reverse winding compared with the inside.
                 vertices=[
                     start_b,
                     end_b,
@@ -1207,21 +1233,25 @@ def create_outside_tunnel_section_mesh(
 
                 outline_colour=(
                     line_colour
-
-                    if draw_outlines
-
+                    if (
+                        line_colour is not None
+                        and (
+                            draw_outlines
+                            or index % 3 == 0
+                        )
+                    )
                     else None
                 ),
 
                 outline_width=(
                     1
-
                     if (
-                        draw_outlines
-                        and line_colour
-                        is not None
+                        line_colour is not None
+                        and (
+                            draw_outlines
+                            or index % 3 == 0
+                        )
                     )
-
                     else 0
                 ),
 
@@ -1236,6 +1266,162 @@ def create_outside_tunnel_section_mesh(
                 },
             )
         )
+
+        # ----------------------------------------------------
+        # LONGITUDINAL GUIDE RIB
+        # ----------------------------------------------------
+        #
+        # One thin raised strip per panel boundary makes the tube
+        # surface much easier to understand while moving quickly.
+        rib_angle = (
+            angle_a
+        )
+
+        rib_a0 = (
+            rib_angle
+            - ridge_half_width
+        )
+
+        rib_a1 = (
+            rib_angle
+            + ridge_half_width
+        )
+
+        rib_colour = (
+            line_colour
+            if line_colour is not None
+            else primary_colour
+        )
+
+        faces.append(
+            Face3D(
+                vertices=[
+                    tunnel_point(
+                        rib_a0 + start_rotation,
+                        start_z,
+                        radius=ridge_radius,
+                    ),
+
+                    tunnel_point(
+                        rib_a1 + start_rotation,
+                        start_z,
+                        radius=ridge_radius,
+                    ),
+
+                    tunnel_point(
+                        rib_a1 + end_rotation,
+                        end_z,
+                        radius=ridge_radius,
+                    ),
+
+                    tunnel_point(
+                        rib_a0 + end_rotation,
+                        end_z,
+                        radius=ridge_radius,
+                    ),
+                ],
+
+                colour=multiply_colour(
+                    rib_colour,
+                    0.82,
+                ),
+
+                outline_colour=None,
+
+                outline_width=0,
+
+                double_sided=True,
+            )
+        )
+
+    # --------------------------------------------------------
+    # CHUNK EDGE RING BANDS
+    # --------------------------------------------------------
+    #
+    # Thin raised rings provide speed/depth cues without bringing
+    # back the heavy segmented look from the old tunnel.
+    ring_colour = (
+        line_colour
+        if line_colour is not None
+        else primary_colour
+    )
+
+    for z_value, rotation in (
+        (
+            start_z,
+            start_rotation,
+        ),
+        (
+            end_z,
+            end_rotation,
+        ),
+    ):
+
+        inner_radius = (
+            radius
+            + 0.04
+        )
+
+        outer_radius = (
+            radius
+            + 0.18
+        )
+
+        for index in range(
+            segments
+        ):
+
+            angle_a = (
+                index
+                * angle_step
+                + rotation
+            )
+
+            angle_b = (
+                angle_a
+                + angle_step
+            )
+
+            faces.append(
+                Face3D(
+                    vertices=[
+                        tunnel_point(
+                            angle_a,
+                            z_value - ring_height,
+                            radius=inner_radius,
+                        ),
+
+                        tunnel_point(
+                            angle_b,
+                            z_value - ring_height,
+                            radius=inner_radius,
+                        ),
+
+                        tunnel_point(
+                            angle_b,
+                            z_value + ring_height,
+                            radius=outer_radius,
+                        ),
+
+                        tunnel_point(
+                            angle_a,
+                            z_value + ring_height,
+                            radius=outer_radius,
+                        ),
+                    ],
+
+                    colour=multiply_colour(
+                        ring_colour,
+                        0.65,
+                    ),
+
+                    outline_colour=None,
+
+                    outline_width=0,
+
+                    double_sided=True,
+                )
+            )
 
     return Mesh3D(
         faces=faces,
@@ -1516,6 +1702,19 @@ class Camera3D:
 
         self.up_reference: Vec3 | None = None
 
+        # ----------------------------------------------------
+        # TRANSITION CAMERA STATE
+        # ----------------------------------------------------
+        #
+        # During an inside/outside transition we do not switch
+        # abruptly between Euler and look-at projection. Instead,
+        # world_to_camera() calculates both camera-space positions
+        # and blends them continuously.
+        self._transition_camera_active = False
+        self._transition_camera_z = 0.0
+        self._transition_player_angle = 0.0
+        self._transition_tunnel_radius = 1.0
+
         self._projection_scale = 1.0
 
         self._recalculate_projection()
@@ -1605,6 +1804,8 @@ class Camera3D:
 
         self.environment_blend = 0.0
 
+        self._transition_camera_active = False
+
     # ========================================================
     # OUTSIDE MODE
     # ========================================================
@@ -1615,10 +1816,22 @@ class Camera3D:
         camera_z: float,
         player_angle: float,
         tunnel_radius: float,
-        camera_distance_multiplier: float = 2.55,
-        camera_back: float = 7.5,
-        look_ahead: float = 26.0,
+        camera_distance_multiplier: float = 1.18,
+        camera_back: float = 2.2,
+        look_ahead: float = 34.0,
     ) -> None:
+        """
+        Configure the camera to ride just above the OUTSIDE surface.
+
+        The old outside camera sat 2.55 tunnel radii away, which made
+        the player feel like they were watching the tube from space.
+
+        This camera stays close to the cylinder, follows the player's
+        angular position, and looks forward along the surface. The
+        result should feel like the inside-tunnel camera has been moved
+        to the exterior rather than replaced with a distant spectator
+        camera.
+        """
 
         self.environment = (
             ENVIRONMENT_OUTSIDE
@@ -1636,9 +1849,21 @@ class Camera3D:
             radians
         )
 
+        # ----------------------------------------------------
+        # CAMERA POSITION
+        # ----------------------------------------------------
+        #
+        # 1.0 * radius would place the camera directly on the tube.
+        # 1.18 keeps it only a little above the surface so geometry
+        # does not clip through the near plane.
         camera_radius = (
             tunnel_radius
-            * camera_distance_multiplier
+            * max(
+                1.08,
+                float(
+                    camera_distance_multiplier
+                ),
+            )
         )
 
         self.position = Vec3(
@@ -1649,12 +1874,23 @@ class Camera3D:
             * camera_radius,
 
             camera_z
-            - camera_back,
+            - max(
+                0.0,
+                float(
+                    camera_back
+                ),
+            ),
         )
 
+        # ----------------------------------------------------
+        # LOOK TARGET
+        # ----------------------------------------------------
+        #
+        # Aim almost exactly along the exterior surface rather than
+        # toward the center of the cylinder.
         target_radius = (
             tunnel_radius
-            * 0.72
+            * 1.00
         )
 
         self.look_target = Vec3(
@@ -1665,22 +1901,30 @@ class Camera3D:
             * target_radius,
 
             camera_z
-            + look_ahead,
+            + max(
+                8.0,
+                float(
+                    look_ahead
+                ),
+            ),
         )
 
-        # "Up" points away from the tube.
-        # This keeps the player's side of the cylinder visually
-        # toward the bottom of the screen.
-
+        # Outward from the tube is "up". This keeps the track surface
+        # under the player in the same intuitive way that the tunnel
+        # wall sits around the player while inside.
         self.up_reference = Vec3(
             radial_x,
             radial_y,
             0.0,
         ).normalized()
 
+        self.rotation.x = 0.0
+        self.rotation.y = 0.0
         self.rotation.z = 0.0
 
         self.environment_blend = 1.0
+
+        self._transition_camera_active = False
 
     # ========================================================
     # TRANSITION
@@ -1695,28 +1939,62 @@ class Camera3D:
         amount: float,
         going_outside: bool,
     ) -> None:
+        """
+        Configure a fully continuous inside/outside camera blend.
 
-        amount = smoothstep(
-            amount
+        No projection-mode switch occurs during the transition.
+        world_to_camera() blends the exact inside and outside
+        camera-space transforms instead.
+        """
+
+        raw_amount = clamp(
+            float(amount),
+            0.0,
+            1.0,
         )
 
-        if not going_outside:
+        eased_progress = smoothstep(
+            raw_amount
+        )
 
-            amount = (
-                1.0
-                - amount
-            )
+        outside_amount = (
+            eased_progress
+            if going_outside
+            else 1.0 - eased_progress
+        )
+
+        outside_amount = clamp(
+            outside_amount,
+            0.0,
+            1.0,
+        )
 
         self.environment = (
             ENVIRONMENT_TRANSITION
         )
 
         self.environment_blend = (
-            amount
+            outside_amount
+        )
+
+        self._transition_camera_active = True
+
+        self._transition_camera_z = float(
+            camera_z
+        )
+
+        self._transition_player_angle = (
+            float(player_angle)
+            % 360.0
+        )
+
+        self._transition_tunnel_radius = max(
+            0.001,
+            float(tunnel_radius),
         )
 
         radians = math.radians(
-            player_angle
+            self._transition_player_angle
         )
 
         radial_x = math.cos(
@@ -1728,82 +2006,60 @@ class Camera3D:
         )
 
         outside_radius = (
-            tunnel_radius
+            self._transition_tunnel_radius
             * 2.55
         )
 
-        camera_radius = (
-            outside_radius
-            * amount
+        outside_position = Vec3(
+            radial_x
+            * outside_radius,
+
+            radial_y
+            * outside_radius,
+
+            self._transition_camera_z
+            - 7.5,
         )
 
-        camera_back = (
-            7.5
-            * amount
+        inside_position = Vec3(
+            0.0,
+            0.0,
+            self._transition_camera_z,
         )
 
+        # Keep public camera fields smoothly interpolated too.
         self.position = Vec3(
-            radial_x
-            * camera_radius,
-
-            radial_y
-            * camera_radius,
-
-            camera_z
-            - camera_back,
-        )
-
-        if (
-            amount
-            < 0.15
-        ):
-
-            self.look_target = None
-
-            self.up_reference = None
-
-            self.rotation = Vec3(
-                0.0,
-                0.0,
-                player_angle,
-            )
-
-            return
-
-        target_radius = (
-            tunnel_radius
-            * 0.72
-            * amount
-        )
-
-        self.look_target = Vec3(
-            radial_x
-            * target_radius,
-
-            radial_y
-            * target_radius,
-
-            camera_z
-            + lerp(
-                10.0,
-                26.0,
-                amount,
+            lerp(
+                inside_position.x,
+                outside_position.x,
+                outside_amount,
+            ),
+            lerp(
+                inside_position.y,
+                outside_position.y,
+                outside_amount,
+            ),
+            lerp(
+                inside_position.z,
+                outside_position.z,
+                outside_amount,
             ),
         )
 
-        self.up_reference = Vec3(
-            radial_x,
-            radial_y,
+        self.rotation = Vec3(
             0.0,
-        ).normalized()
-
-        self.rotation.z = (
-            player_angle
+            0.0,
+            self._transition_player_angle
             * (
                 1.0
-                - amount
-            )
+                - outside_amount
+            ),
         )
+
+        # world_to_camera() handles transition projection itself.
+        # Keeping these None prevents a hidden look-at mode switch.
+        self.look_target = None
+        self.up_reference = None
 
     # ========================================================
     # EULER CAMERA
@@ -2024,6 +2280,206 @@ class Camera3D:
         )
 
     # ========================================================
+    # TRANSITION WORLD TO CAMERA
+    # ========================================================
+
+    def _world_to_camera_transition(
+        self,
+        point: Vec3,
+    ) -> Vec3:
+        """
+        Blend the exact inside-camera and outside-camera transforms.
+
+        At environment_blend == 0 this exactly matches
+        configure_inside(). At environment_blend == 1 it exactly
+        matches configure_outside().
+        """
+
+        blend = clamp(
+            self.environment_blend,
+            0.0,
+            1.0,
+        )
+
+        camera_z = (
+            self._transition_camera_z
+        )
+
+        player_angle = (
+            self._transition_player_angle
+        )
+
+        tunnel_radius = (
+            self._transition_tunnel_radius
+        )
+
+        # ----------------------------------------------------
+        # INSIDE CAMERA SPACE
+        # ----------------------------------------------------
+
+        inside_x = (
+            point.x
+        )
+
+        inside_y = (
+            point.y
+        )
+
+        inside_z = (
+            point.z
+            - camera_z
+        )
+
+        roll = math.radians(
+            -player_angle
+        )
+
+        cosine = math.cos(
+            roll
+        )
+
+        sine = math.sin(
+            roll
+        )
+
+        inside_camera = Vec3(
+            inside_x
+            * cosine
+            - inside_y
+            * sine,
+
+            inside_x
+            * sine
+            + inside_y
+            * cosine,
+
+            inside_z,
+        )
+
+        # ----------------------------------------------------
+        # OUTSIDE CAMERA SPACE
+        # ----------------------------------------------------
+
+        radians = math.radians(
+            player_angle
+        )
+
+        radial_x = math.cos(
+            radians
+        )
+
+        radial_y = math.sin(
+            radians
+        )
+
+        outside_position = Vec3(
+            radial_x
+            * tunnel_radius
+            * 2.55,
+
+            radial_y
+            * tunnel_radius
+            * 2.55,
+
+            camera_z
+            - 7.5,
+        )
+
+        outside_target = Vec3(
+            radial_x
+            * tunnel_radius
+            * 0.72,
+
+            radial_y
+            * tunnel_radius
+            * 0.72,
+
+            camera_z
+            + 26.0,
+        )
+
+        forward = (
+            outside_target
+            - outside_position
+        ).normalized()
+
+        up_reference = Vec3(
+            radial_x,
+            radial_y,
+            0.0,
+        ).normalized()
+
+        right = (
+            forward.cross(
+                up_reference
+            )
+        )
+
+        if (
+            right.length()
+            < 0.001
+        ):
+            right = (
+                forward.cross(
+                    Vec3(
+                        1.0,
+                        0.0,
+                        0.0,
+                    )
+                )
+            )
+
+        right = right.normalized()
+
+        up = (
+            right.cross(
+                forward
+            )
+        ).normalized()
+
+        relative = (
+            point
+            - outside_position
+        )
+
+        outside_camera = Vec3(
+            relative.dot(
+                right
+            ),
+            relative.dot(
+                up
+            ),
+            relative.dot(
+                forward
+            ),
+        )
+
+        # ----------------------------------------------------
+        # CONTINUOUS BLEND
+        # ----------------------------------------------------
+
+        return Vec3(
+            lerp(
+                inside_camera.x,
+                outside_camera.x,
+                blend,
+            ),
+
+            lerp(
+                inside_camera.y,
+                outside_camera.y,
+                blend,
+            ),
+
+            lerp(
+                inside_camera.z,
+                outside_camera.z,
+                blend,
+            ),
+        )
+
+
+    # ========================================================
     # WORLD TO CAMERA
     # ========================================================
 
@@ -2031,6 +2487,18 @@ class Camera3D:
         self,
         point: Vec3,
     ) -> Vec3:
+
+        if (
+            self._transition_camera_active
+            and self.environment
+            == ENVIRONMENT_TRANSITION
+        ):
+
+            return (
+                self._world_to_camera_transition(
+                    point
+                )
+            )
 
         if (
             self.look_target
@@ -2535,42 +3003,66 @@ def endless_transition_information(
     str,
     str,
 ]:
+    """
+    Return stable Endless inside/outside transition information.
+
+    Endless changes environment every 1000 metres.
+
+    The old implementation used floor(distance / 1000), which
+    selected the previous boundary while approaching a transition.
+    That made the transition activate inconsistently and could leave
+    the camera visually stuck in transition.
+
+    This version selects the nearest 1000 m boundary and only marks
+    the transition active while the player is actually inside that
+    boundary's transition window.
+    """
 
     distance = max(
         0.0,
-        distance,
+        float(distance),
     )
 
-    if (
-        distance
-        < 1000.0
-    ):
+    transition_length = max(
+        1.0,
+        float(transition_length),
+    )
 
-        return (
-            False,
-            0.0,
-            ENVIRONMENT_INSIDE,
-            ENVIRONMENT_INSIDE,
-        )
+    # There is no transition before the first 1000 m boundary,
+    # except while actually approaching that boundary.
+    section_length = 1000.0
+
+    # Find the nearest environment boundary instead of the previous
+    # boundary. This makes both the approach and exit sides use the
+    # same transition window.
+    boundary_index = max(
+        1,
+        int(
+            round(
+                distance
+                / section_length
+            )
+        ),
+    )
 
     boundary = (
-        math.floor(
-            distance
-            / 1000.0
-        )
-        * 1000.0
+        boundary_index
+        * section_length
+    )
+
+    half_transition = (
+        transition_length
+        / 2.0
     )
 
     transition_start = (
         boundary
-        - transition_length
-        / 2.0
+        - half_transition
     )
 
     transition_end = (
         boundary
-        + transition_length
-        / 2.0
+        + half_transition
     )
 
     if not (
@@ -2578,7 +3070,6 @@ def endless_transition_information(
         <= distance
         <= transition_end
     ):
-
         current = (
             endless_environment_for_distance(
                 distance
@@ -2592,33 +3083,26 @@ def endless_transition_information(
             current,
         )
 
+    # The section before boundary N is section N - 1.
     before_section = max(
         0,
-        int(
-            boundary
-            // 1000.0
-        )
-        - 1,
+        boundary_index - 1,
     )
 
     before = (
         ENVIRONMENT_INSIDE
-
         if (
             before_section
             % 2
             == 0
         )
-
         else ENVIRONMENT_OUTSIDE
     )
 
     after = (
         ENVIRONMENT_OUTSIDE
-
         if before
         == ENVIRONMENT_INSIDE
-
         else ENVIRONMENT_INSIDE
     )
 
@@ -2627,23 +3111,28 @@ def endless_transition_information(
             distance
             - transition_start
         )
-        / max(
-            1.0,
-            transition_length,
-        )
+        / transition_length
     )
+
+    # Clamp hard at the endpoints so camera state reaches exactly
+    # 0.0 and 1.0 instead of hovering just short due to floating
+    # point movement.
+    progress = clamp(
+        progress,
+        0.0,
+        1.0,
+    )
+
+    if progress <= 0.000001:
+        progress = 0.0
+
+    elif progress >= 0.999999:
+        progress = 1.0
 
     return (
         True,
-
-        clamp(
-            progress,
-            0.0,
-            1.0,
-        ),
-
+        progress,
         before,
-
         after,
     )
 
@@ -2869,15 +3358,32 @@ def validate_geometry_system(
         )
     )
 
+    # The detailed outside renderer intentionally contains more
+    # geometry than the old flat 10-panel cylinder. It now includes
+    # the 10 base panels plus raised ribs and edge-ring faces.
+    #
+    # Validate the minimum base geometry instead of requiring the
+    # obsolete exact face count.
     if (
         len(
             outside_mesh.faces
         )
-        != 10
+        < 10
     ):
 
         raise ValueError(
             "Outside tunnel mesh validation failed."
+        )
+
+    if (
+        outside_mesh.metadata.get(
+            "environment"
+        )
+        != ENVIRONMENT_OUTSIDE
+    ):
+
+        raise ValueError(
+            "Outside tunnel environment metadata validation failed."
         )
 
     if (

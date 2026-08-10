@@ -68,7 +68,7 @@ from obstacles import (
 # ============================================================
 # TUNNEL RUNNER
 # LEVEL SYSTEM
-# VERSION 0.1.0
+# VERSION 0.1.1 - CURRENT ENGINE + CLOSER SPACING
 # ============================================================
 #
 # This file controls:
@@ -1403,14 +1403,15 @@ def generate_structured_campaign(
         100.0,
     )
 
+    # Tighter spacing than the original build.
     spacing = clamp(
-        48.0
+        37.0
         / max(
-            0.65,
+            0.70,
             definition.obstacle_density,
         ),
-        22.0,
-        50.0,
+        17.0,
+        39.0,
     )
 
     previous_angle = 0.0
@@ -1700,7 +1701,7 @@ def add_milestone_finale(
 
             count=4,
 
-            spacing=46.0,
+            spacing=29.0,
 
             speed=36.0,
         )
@@ -1713,7 +1714,7 @@ def add_milestone_finale(
 
             count=5,
 
-            spacing=40.0,
+            spacing=26.0,
 
             blade_count=1,
 
@@ -2082,7 +2083,7 @@ def campaign_speed_at_distance(
 class EndlessGeneratorState:
     seed: int | None = None
 
-    next_z: float = 75.0
+    next_z: float = 58.0
 
     previous_angle: float = 0.0
 
@@ -2129,7 +2130,7 @@ class EndlessGenerator:
             EndlessGeneratorState(
                 seed=seed,
 
-                next_z=75.0,
+                next_z=58.0,
 
                 previous_angle=0.0,
 
@@ -2235,9 +2236,17 @@ class EndlessGenerator:
             self.state.next_z
         )
 
+        # Closer Endless spacing, with a hard minimum so obstacles
+        # do not overlap into impossible collision zones.
         gap *= self.random.uniform(
+            0.72,
             0.90,
-            1.12,
+        )
+
+        gap = clamp(
+            gap,
+            20.0,
+            72.0,
         )
 
         self.state.next_z += (

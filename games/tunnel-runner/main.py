@@ -146,7 +146,7 @@ from online_leaderboard import (
 # ============================================================
 # TUNNEL RUNNER
 # MAIN GAME
-# VERSION 0.2.0
+# VERSION 0.2.8 - BETTER OUTSIDE GRAPHICS
 # ============================================================
 
 
@@ -217,8 +217,15 @@ OUTSIDE_TUBE_RADIUS = (
 
 OUTSIDE_HAZARD_RADIUS = (
     TUNNEL_RADIUS
-    * 1.065
+    * 1.045
 )
+
+# Outside hazards need to stand clearly above the tube surface.
+OUTSIDE_HAZARD_HEIGHT = 3.6
+
+# Slightly thicker in the forward direction so they read as real
+# barriers instead of paper-thin plates.
+OUTSIDE_HAZARD_DEPTH_MULTIPLIER = 0.90
 
 OUTSIDE_HAZARD_SEGMENTS = 24
 
@@ -1096,6 +1103,16 @@ class TunnelRunnerGame:
         self.current_speed = 0.0
 
         self.maximum_speed_this_run = 0.0
+
+        # ----------------------------------------------------
+        # WORLD DISTANCE
+        # ----------------------------------------------------
+        #
+        # This must be independent from camera.position.z.
+        # The outside camera intentionally sits behind the player,
+        # so using camera Z as gameplay distance makes the game jump
+        # backward during an environment switch.
+        self.world_distance = 0.0
 
         self.run_start_z = 0.0
 
@@ -2191,6 +2208,8 @@ class TunnelRunnerGame:
 
         self.maximum_speed_this_run = 0.0
 
+        self.world_distance = 0.0
+
         self.run_start_z = 0.0
 
         self.run_start_ticks = (
@@ -2269,15 +2288,29 @@ class TunnelRunnerGame:
 
         self.reset_run_state()
 
-        self.player_angle = (
-            generated.starting_angle
-        )
-
         self.current_environment = (
             campaign_environment_for_level(
                 level_number
             )
         )
+
+        # In inside-tunnel mode the bottom of the screen is 90 degrees
+        # clockwise from the camera's roll angle. Keep the player's
+        # physical collision position aligned with the generated safe
+        # starting angle.
+        if (
+            self.current_environment
+            == ENVIRONMENT_OUTSIDE
+        ):
+            self.player_angle = (
+                generated.starting_angle
+                % 360.0
+            )
+        else:
+            self.player_angle = (
+                generated.starting_angle
+                + 90.0
+            ) % 360.0
 
         self.current_speed = (
             self.current_level.speed
@@ -2352,11 +2385,19 @@ class TunnelRunnerGame:
     def run_distance(
         self,
     ):
+        """
+        Gameplay distance travelled through the course.
+
+        This is intentionally independent from the camera position.
+        Inside and outside cameras use different offsets, so camera Z
+        must never be used as the authoritative gameplay distance.
+        """
 
         return max(
             0.0,
-            self.camera.position.z
-            - self.run_start_z,
+            float(
+                self.world_distance
+            ),
         )
 
     def run_time_seconds(
@@ -2575,8 +2616,17 @@ class TunnelRunnerGame:
     def update_environment(
         self,
     ):
+        """
+        Resolve the environment without ever putting the 3D renderer
+        into a half-inside / half-outside camera state.
 
-        distance = (
+        The transition is now visual only:
+        - first half: remain in the old environment while fading out
+        - midpoint: switch exactly once
+        - second half: remain in the new environment while fading in
+        """
+
+        distance = float(
             self.run_distance
         )
 
@@ -2605,16 +2655,60 @@ class TunnelRunnerGame:
                 distance
             )
 
-        self.transition_active = active
-        self.transition_progress = progress
-        self.transition_from = before
-        self.transition_to = after
+        progress = clamp(
+            float(progress),
+            0.0,
+            1.0,
+        )
 
-        if active:
+        valid_transition = (
+            bool(active)
+            and before
+            != after
+            and 0.0
+            < progress
+            < 1.0
+        )
 
-            self.current_environment = (
-                ENVIRONMENT_TRANSITION
-            )
+        self.transition_active = (
+            valid_transition
+        )
+
+        self.transition_progress = (
+            progress
+            if valid_transition
+            else 0.0
+        )
+
+        self.transition_from = (
+            before
+        )
+
+        self.transition_to = (
+            after
+        )
+
+        if valid_transition:
+
+            # ------------------------------------------------
+            # FULL BLACKOUT ENVIRONMENT SWITCH
+            # ------------------------------------------------
+            #
+            # The screen is fully black from 40% through 60% of
+            # transition progress. Switch environments only inside
+            # that blackout window so the camera/geometry change can
+            # never be visible to the player.
+            if progress < 0.5:
+
+                self.current_environment = (
+                    before
+                )
+
+            else:
+
+                self.current_environment = (
+                    after
+                )
 
         else:
 
@@ -2624,6 +2718,19 @@ class TunnelRunnerGame:
                 )
             )
 
+        # Absolute safety net.
+        if (
+            self.current_environment
+            not in (
+                ENVIRONMENT_INSIDE,
+                ENVIRONMENT_OUTSIDE,
+            )
+        ):
+
+            self.current_environment = (
+                ENVIRONMENT_INSIDE
+            )
+
     # ========================================================
     # CONFIGURE CAMERA
     # ========================================================
@@ -2631,39 +2738,18 @@ class TunnelRunnerGame:
     def configure_camera(
         self,
     ):
+        """
+        Configure exactly one stable camera mode per frame.
 
-        camera_z = (
+        Transition animation is handled as a screen fade, not by
+        morphing two incompatible 3D camera systems.
+        """
+
+        camera_z = float(
             self.run_distance
         )
 
-        if self.transition_active:
-
-            going_outside = (
-                self.transition_to
-                == ENVIRONMENT_OUTSIDE
-            )
-
-            self.camera.configure_transition(
-                camera_z=camera_z,
-
-                player_angle=(
-                    self.player_angle
-                ),
-
-                tunnel_radius=(
-                    TUNNEL_RADIUS
-                ),
-
-                amount=(
-                    self.transition_progress
-                ),
-
-                going_outside=(
-                    going_outside
-                ),
-            )
-
-        elif (
+        if (
             self.current_environment
             == ENVIRONMENT_OUTSIDE
         ):
@@ -3367,11 +3453,12 @@ class TunnelRunnerGame:
             * delta_time
         )
 
-        # Temporarily store forward distance in the camera.
-        # configure_camera() will place the camera properly for
-        # the selected environment afterward.
-
-        self.camera.position.z = (
+        # Authoritative gameplay progress.
+        #
+        # Never store this in camera.position.z. The outside camera
+        # has a deliberate Z offset, which previously caused distance
+        # to jump backward and made the transition switch itself back.
+        self.world_distance = (
             new_distance
         )
 
@@ -3388,12 +3475,65 @@ class TunnelRunnerGame:
             new_distance,
         )
 
-        collision = (
-            self.obstacles.check_collision(
-                new_distance,
-                self.player_angle,
-            )
+        # ----------------------------------------------------
+        # PLAYER COLLISION ANGLE
+        # ----------------------------------------------------
+        #
+        # Inside the tunnel, camera roll keeps the player's physical
+        # position at the bottom of the screen. Because screen Y is
+        # inverted during projection, that bottom position corresponds
+        # to camera roll - 90 degrees.
+        #
+        # Outside the tube, player_angle directly represents the radial
+        # position. During transitions, camera.environment_blend moves
+        # smoothly from 0.0 (inside) to 1.0 (outside), so interpolate the
+        # collision offset as well.
+        #
+        environment_blend = clamp(
+            getattr(
+                self.camera,
+                "environment_blend",
+                (
+                    1.0
+                    if self.current_environment
+                    == ENVIRONMENT_OUTSIDE
+                    else 0.0
+                ),
+            ),
+            0.0,
+            1.0,
         )
+
+        collision_player_angle = (
+            self.player_angle
+            - 90.0
+            * (
+                1.0
+                - environment_blend
+            )
+        ) % 360.0
+
+        # ----------------------------------------------------
+        # TRANSITION INVULNERABILITY
+        # ----------------------------------------------------
+        #
+        # The player must never die while the environment is changing.
+        # During the blackout the camera and obstacle presentation can
+        # switch from inside to outside (or vice versa), so collision is
+        # intentionally disabled for the entire transition window.
+        #
+        # Obstacles still update above, which means anything passed
+        # during the transition naturally moves behind the player.
+        collision = None
+
+        if not self.transition_active:
+
+            collision = (
+                self.obstacles.check_collision(
+                    new_distance,
+                    collision_player_angle,
+                )
+            )
 
         if collision is not None:
 
@@ -3403,8 +3543,12 @@ class TunnelRunnerGame:
 
             return
 
+        # Do not finish a campaign level in the middle of a blackout
+        # either. Wait until the environment transition is complete.
         if (
-            self.game_mode
+            not self.transition_active
+
+            and self.game_mode
             == MODE_LEVELS
 
             and self.obstacles.reached_finish(
@@ -3681,9 +3825,9 @@ class TunnelRunnerGame:
             faces = []
 
             half_depth = max(
-                0.35,
+                0.52,
                 obstacle.thickness
-                * 0.55,
+                * OUTSIDE_HAZARD_DEPTH_MULTIPLIER,
             )
 
             for index in range(
@@ -3727,7 +3871,7 @@ class TunnelRunnerGame:
 
                 radius_outer = (
                     OUTSIDE_HAZARD_RADIUS
-                    + 1.3
+                    + OUTSIDE_HAZARD_HEIGHT
                 )
 
                 z0 = (
@@ -3815,7 +3959,51 @@ class TunnelRunnerGame:
 
                         colour=multiply_colour(
                             colour,
-                            0.65,
+                            0.52,
+                        ),
+
+                        outline_colour=None,
+
+                        outline_width=0,
+
+                        double_sided=True,
+                    )
+                )
+
+
+                # Trailing wall gives each obstacle real thickness and
+                # makes its silhouette much easier to read at speed.
+                faces.append(
+                    Face3D(
+                        vertices=[
+                            tunnel_point(
+                                a0,
+                                z1,
+                                radius=radius_inner,
+                            ),
+
+                            tunnel_point(
+                                a0,
+                                z1,
+                                radius=radius_outer,
+                            ),
+
+                            tunnel_point(
+                                a1,
+                                z1,
+                                radius=radius_outer,
+                            ),
+
+                            tunnel_point(
+                                a1,
+                                z1,
+                                radius=radius_inner,
+                            ),
+                        ],
+
+                        colour=multiply_colour(
+                            colour,
+                            0.42,
                         ),
 
                         outline_colour=None,
@@ -3941,38 +4129,16 @@ class TunnelRunnerGame:
             )
         )
 
-        outside_amount = 0.0
-
+        # ----------------------------------------------------
+        # OBSTACLES
+        # ----------------------------------------------------
+        #
+        # Never mix inside/outside obstacle renderers in one frame.
+        # The fade transition hides the single midpoint switch.
         if (
             self.current_environment
             == ENVIRONMENT_OUTSIDE
         ):
-
-            outside_amount = 1.0
-
-        elif self.transition_active:
-
-            if (
-                self.transition_to
-                == ENVIRONMENT_OUTSIDE
-            ):
-
-                outside_amount = (
-                    self.transition_progress
-                )
-
-            else:
-
-                outside_amount = (
-                    1.0
-                    - self.transition_progress
-                )
-
-        # ----------------------------------------------------
-        # OBSTACLES
-        # ----------------------------------------------------
-
-        if outside_amount >= 0.5:
 
             self.renderer.add_meshes(
                 self.build_outside_obstacle_meshes()
@@ -3987,13 +4153,9 @@ class TunnelRunnerGame:
                 )
             )
 
-        # ----------------------------------------------------
-        # TRANSITION PORTALS
-        # ----------------------------------------------------
-
-        self.renderer.add_meshes(
-            self.build_transition_meshes()
-        )
+        # Transition portal geometry is intentionally disabled.
+        # It was another moving geometry system fighting the camera
+        # during environment changes.
 
         # ----------------------------------------------------
         # RENDER
@@ -4377,6 +4539,7 @@ class TunnelRunnerGame:
 
             self.draw_3d_world()
             self.draw_hud()
+            self._draw_environment_transition_fade()
 
         elif self.state in (
             STATE_PAUSED,
@@ -4398,6 +4561,7 @@ class TunnelRunnerGame:
 
                 self.draw_3d_world()
                 self.draw_hud()
+                self._draw_environment_transition_fade()
 
         else:
 
@@ -4720,7 +4884,19 @@ class TunnelRunnerGame:
 
     def _draw_dark_overlay(
         self,
+        alpha=180,
     ):
+
+        alpha = max(
+            0,
+            min(
+                255,
+                int(alpha),
+            ),
+        )
+
+        if alpha <= 0:
+            return
 
         overlay = pygame.Surface(
             (
@@ -4735,7 +4911,7 @@ class TunnelRunnerGame:
                 0,
                 0,
                 0,
-                180,
+                alpha,
             )
         )
 
@@ -4746,6 +4922,110 @@ class TunnelRunnerGame:
                 0,
             ),
         )
+
+    # ========================================================
+    # ENVIRONMENT TRANSITION FADE
+    # ========================================================
+
+    def _draw_environment_transition_fade(
+        self,
+    ):
+
+        if not self.transition_active:
+            return
+
+        progress = clamp(
+            self.transition_progress,
+            0.0,
+            1.0,
+        )
+
+        # ----------------------------------------------------
+        # TRUE BLACKOUT TRANSITION
+        # ----------------------------------------------------
+        #
+        # 0.00 -> 0.40 : fade from clear to fully black
+        # 0.40 -> 0.60 : hold at 100% black
+        # 0.60 -> 1.00 : fade from fully black to clear
+        #
+        # The environment switches at 0.50, while the entire
+        # screen is already completely black.
+        fade_in_end = 0.40
+        blackout_end = 0.60
+
+        if progress < fade_in_end:
+
+            amount = (
+                progress
+                / fade_in_end
+            )
+
+            amount = clamp(
+                amount,
+                0.0,
+                1.0,
+            )
+
+            amount = (
+                amount
+                * amount
+                * (
+                    3.0
+                    - 2.0
+                    * amount
+                )
+            )
+
+            alpha = round(
+                255
+                * amount
+            )
+
+        elif progress <= blackout_end:
+
+            alpha = 255
+
+        else:
+
+            amount = (
+                (
+                    progress
+                    - blackout_end
+                )
+                / (
+                    1.0
+                    - blackout_end
+                )
+            )
+
+            amount = clamp(
+                amount,
+                0.0,
+                1.0,
+            )
+
+            amount = (
+                amount
+                * amount
+                * (
+                    3.0
+                    - 2.0
+                    * amount
+                )
+            )
+
+            alpha = round(
+                255
+                * (
+                    1.0
+                    - amount
+                )
+            )
+
+        self._draw_dark_overlay(
+            alpha
+        )
+
 
     # ========================================================
     # PAUSE

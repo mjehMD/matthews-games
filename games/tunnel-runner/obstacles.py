@@ -52,8 +52,8 @@ from geometry import (
 # ============================================================
 # TUNNEL RUNNER
 # OBSTACLE SYSTEM
-# VERSION 0.1.3
-# PERFORMANCE + FAIR COLLISION BUILD
+# VERSION 0.1.5
+# CENTER-HOLE + HITBOX + VALIDATOR FIX
 # ============================================================
 
 
@@ -70,6 +70,21 @@ MIN_PLAYABLE_GAP = 50.0
 MIN_SPINNER_GAP = 66.0
 
 MIN_BAR_GAP = 128.0
+
+# Rotating-bar geometry.
+#
+# The bar is split into two arms, leaving a visible open hole in
+# the middle instead of one solid stick crossing the whole screen.
+BAR_CENTER_HOLE_RADIUS = (
+    TUNNEL_RADIUS
+    * 0.28
+)
+
+# Width of each bar arm in world units.
+BAR_ARM_WIDTH = 1.0
+
+# Extra angular forgiveness around the true visual gap.
+BAR_COLLISION_FORGIVENESS = 6.0
 
 MAX_COLLISION_PADDING = 7.0
 
@@ -618,28 +633,53 @@ class SingleBarObstacle(
     def safe_arcs(
         self,
     ) -> list[SafeArc]:
+        """
+        Return the two playable arcs beside the rotating bar.
 
-        angle = (
+        IMPORTANT:
+        The physical bar lies on the obstacle's current angle and
+        the opposite angle. Therefore those two angles are HAZARDS,
+        not safe areas.
+
+        The safe areas are centered 90 degrees away from the bar,
+        which matches the visible geometry.
+        """
+
+        bar_angle = (
             self.current_angle()
         )
 
-        width = max(
+        # The old collision used safe arcs centered directly on
+        # bar_angle and bar_angle + 180. That made the hitbox almost
+        # exactly backwards: the visible stick looked dangerous where
+        # collision said it was safe.
+        #
+        # Keep a generous opening on each side of the bar.
+        safe_width = clamp(
+            max(
+                MIN_BAR_GAP,
+                self.safe_width,
+            )
+            + BAR_COLLISION_FORGIVENESS,
             MIN_BAR_GAP,
-            self.safe_width,
+            168.0,
         )
 
         return [
             SafeArc(
-                angle,
-                width,
+                normalize_degrees(
+                    bar_angle
+                    + 90.0
+                ),
+                safe_width,
             ),
 
             SafeArc(
                 normalize_degrees(
-                    angle
-                    + 180.0
+                    bar_angle
+                    + 270.0
                 ),
-                width,
+                safe_width,
             ),
         ]
 
@@ -1004,27 +1044,62 @@ def create_wall_mesh(
 # BAR GEOMETRY
 # ============================================================
 
-def create_bar_mesh(
+def create_bar_arm_mesh(
     *,
     z: float,
     angle: float,
+    direction: float,
     colour: tuple[int, int, int],
     thickness: float = 0.75,
 ) -> Mesh3D:
+    """
+    Create one half of a rotating bar.
+
+    direction:
+        +1.0 = one side of the tunnel
+        -1.0 = opposite side
+
+    Two arms are used instead of one full-width box so there is a
+    real visible opening in the center.
+    """
+
+    hole_radius = clamp(
+        BAR_CENTER_HOLE_RADIUS,
+        0.8,
+        TUNNEL_RADIUS
+        * 0.55,
+    )
+
+    outer_radius = (
+        TUNNEL_RADIUS
+        * 1.06
+    )
+
+    arm_length = max(
+        0.25,
+        outer_radius
+        - hole_radius,
+    )
+
+    local_center_x = (
+        direction
+        * (
+            hole_radius
+            + arm_length
+            / 2.0
+        )
+    )
 
     mesh = create_box_mesh(
         center=Vec3(
-            0.0,
+            local_center_x,
             0.0,
             z,
         ),
 
         size=Vec3(
-            TUNNEL_RADIUS
-            * 2.12,
-
-            1.0,
-
+            arm_length,
+            BAR_ARM_WIDTH,
             thickness,
         ),
 
@@ -1039,15 +1114,43 @@ def create_bar_mesh(
 
     return rotate_mesh_vertices_z(
         mesh,
-
         angle,
-
         origin=Vec3(
             0.0,
             0.0,
             z,
         ),
     )
+
+
+def create_bar_meshes(
+    *,
+    z: float,
+    angle: float,
+    colour: tuple[int, int, int],
+    thickness: float = 0.75,
+) -> list[Mesh3D]:
+    """
+    Create a rotating stick with a genuine center hole.
+    """
+
+    return [
+        create_bar_arm_mesh(
+            z=z,
+            angle=angle,
+            direction=1.0,
+            colour=colour,
+            thickness=thickness,
+        ),
+
+        create_bar_arm_mesh(
+            z=z,
+            angle=angle,
+            direction=-1.0,
+            colour=colour,
+            thickness=thickness,
+        ),
+    ]
 
 
 def build_bar(
@@ -1060,8 +1163,12 @@ def build_bar(
         obstacle.current_angle()
     )
 
-    meshes = [
-        create_bar_mesh(
+    meshes: list[
+        Mesh3D
+    ] = []
+
+    meshes.extend(
+        create_bar_meshes(
             z=obstacle.z,
 
             angle=angle,
@@ -1074,12 +1181,12 @@ def build_bar(
                 obstacle.thickness
             ),
         )
-    ]
+    )
 
     if double:
 
-        meshes.append(
-            create_bar_mesh(
+        meshes.extend(
+            create_bar_meshes(
                 z=obstacle.z,
 
                 angle=(
@@ -2714,8 +2821,21 @@ def validate_obstacle_system(
         rotation_speed=0.0,
     )
 
-    if not bar.player_is_safe(
+    # The bar itself lies along 0 / 180 degrees when angle=0.
+    # Therefore those directions are hazards.
+    #
+    # The open playable areas are perpendicular to the bar at
+    # 90 / 270 degrees.
+    if bar.player_is_safe(
         0.0
+    ):
+
+        raise ValueError(
+            "Rotating bar collision validation failed."
+        )
+
+    if not bar.player_is_safe(
+        90.0
     ):
 
         raise ValueError(
@@ -2723,11 +2843,19 @@ def validate_obstacle_system(
         )
 
     if bar.player_is_safe(
-        90.0
+        180.0
     ):
 
         raise ValueError(
-            "Rotating bar collision validation failed."
+            "Rotating bar opposite collision validation failed."
+        )
+
+    if not bar.player_is_safe(
+        270.0
+    ):
+
+        raise ValueError(
+            "Rotating bar opposite safe opening validation failed."
         )
 
     # ========================================================

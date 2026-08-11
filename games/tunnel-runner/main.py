@@ -146,7 +146,7 @@ from online_leaderboard import (
 # ============================================================
 # TUNNEL RUNNER
 # MAIN GAME
-# VERSION 0.2.8 - BETTER OUTSIDE GRAPHICS
+# VERSION 0.2.9 - OUTSIDE 40+ FPS OPTIMIZATION
 # ============================================================
 
 
@@ -220,14 +220,29 @@ OUTSIDE_HAZARD_RADIUS = (
     * 1.045
 )
 
-# Outside hazards need to stand clearly above the tube surface.
+# Outside hazards remain tall and easy to see.
 OUTSIDE_HAZARD_HEIGHT = 3.6
 
-# Slightly thicker in the forward direction so they read as real
-# barriers instead of paper-thin plates.
-OUTSIDE_HAZARD_DEPTH_MULTIPLIER = 0.90
+# Slightly thinner geometry is much cheaper to draw while still
+# reading as a solid barrier at speed.
+OUTSIDE_HAZARD_DEPTH_MULTIPLIER = 0.72
 
-OUTSIDE_HAZARD_SEGMENTS = 24
+# 24 radial slices was far too expensive in Pygame's software
+# renderer. 12 still looks round enough at gameplay speed.
+OUTSIDE_HAZARD_SEGMENTS = 12
+
+# Outside mode uses a shorter render distance because the
+# surface-riding camera cannot meaningfully see as far as the
+# inside-tunnel camera.
+OUTSIDE_OBSTACLE_RENDER_DISTANCE = (
+    TUNNEL_VISIBLE_LENGTH
+    * 0.42
+)
+
+# Only construct outside obstacle geometry near the camera side
+# of the tube. Faces around the back of the cylinder are hidden
+# by the tube anyway.
+OUTSIDE_VISIBLE_HALF_ANGLE = 118.0
 
 
 # ============================================================
@@ -3804,7 +3819,7 @@ class TunnelRunnerGame:
         visible = (
             self.obstacles.visible_obstacles(
                 self.run_distance,
-                OBSTACLE_RENDER_DISTANCE,
+                OUTSIDE_OBSTACLE_RENDER_DISTANCE,
             )
         )
 
@@ -3849,6 +3864,32 @@ class TunnelRunnerGame:
                     + step
                     / 2.0
                 )
+
+                # ------------------------------------------------
+                # CAMERA-SIDE CULLING
+                # ------------------------------------------------
+                #
+                # The outside camera rides on the tube surface.
+                # Geometry more than ~118 degrees around the tube
+                # from the player is hidden by the cylinder, so do
+                # not create those faces at all.
+                angle_delta = abs(
+                    (
+                        (
+                            midpoint
+                            - self.player_angle
+                            + 180.0
+                        )
+                        % 360.0
+                    )
+                    - 180.0
+                )
+
+                if (
+                    angle_delta
+                    > OUTSIDE_VISIBLE_HALF_ANGLE
+                ):
+                    continue
 
                 if self._angle_is_safe(
                     obstacle,
@@ -3970,49 +4011,6 @@ class TunnelRunnerGame:
                     )
                 )
 
-
-                # Trailing wall gives each obstacle real thickness and
-                # makes its silhouette much easier to read at speed.
-                faces.append(
-                    Face3D(
-                        vertices=[
-                            tunnel_point(
-                                a0,
-                                z1,
-                                radius=radius_inner,
-                            ),
-
-                            tunnel_point(
-                                a0,
-                                z1,
-                                radius=radius_outer,
-                            ),
-
-                            tunnel_point(
-                                a1,
-                                z1,
-                                radius=radius_outer,
-                            ),
-
-                            tunnel_point(
-                                a1,
-                                z1,
-                                radius=radius_inner,
-                            ),
-                        ],
-
-                        colour=multiply_colour(
-                            colour,
-                            0.42,
-                        ),
-
-                        outline_colour=None,
-
-                        outline_width=0,
-
-                        double_sided=True,
-                    )
-                )
 
             if faces:
 

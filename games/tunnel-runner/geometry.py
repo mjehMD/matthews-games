@@ -10,7 +10,7 @@ import pygame
 # ============================================================
 # TUNNEL RUNNER
 # 3D GEOMETRY ENGINE
-# VERSION 0.2.5 - DETAILED OUTSIDE VALIDATOR FIX
+# VERSION 0.2.6 - FAST OUTSIDE SURFACE
 # ============================================================
 #
 # NEW:
@@ -1120,16 +1120,14 @@ def create_outside_tunnel_section_mesh(
     draw_outlines: bool = False,
 ) -> Mesh3D:
     """
-    Build a more readable exterior tube.
+    Fast exterior-tube mesh.
 
-    The previous outside surface was just a flat ring of alternating
-    panels. This version adds:
-    - stronger alternating panel contrast
-    - subtle raised longitudinal ribs
-    - thin ring bands at each chunk edge
-    - selective outlines
-
-    The extra geometry is deliberately lightweight.
+    Performance rules:
+    - one face per cylinder segment
+    - no raised ribs
+    - no extra ring-band geometry
+    - strong alternating colour contrast keeps depth readable
+    - selective outlines preserve the improved visual style
     """
 
     segments = max(
@@ -1147,19 +1145,6 @@ def create_outside_tunnel_section_mesh(
         360.0
         / segments
     )
-
-    ridge_radius = (
-        radius
-        + 0.10
-    )
-
-    ridge_half_width = min(
-        1.6,
-        angle_step
-        * 0.09,
-    )
-
-    ring_height = 0.08
 
     for index in range(
         segments
@@ -1210,14 +1195,21 @@ def create_outside_tunnel_section_mesh(
             outside=True,
         )
 
-        # Give the exterior stronger depth/contrast than the inside.
         colour = multiply_colour(
             base_colour,
             (
-                1.08
+                1.10
                 if index % 2 == 0
-                else 0.78
+                else 0.72
             ),
+        )
+
+        use_outline = (
+            line_colour is not None
+            and (
+                draw_outlines
+                or index % 3 == 0
+            )
         )
 
         faces.append(
@@ -1233,25 +1225,13 @@ def create_outside_tunnel_section_mesh(
 
                 outline_colour=(
                     line_colour
-                    if (
-                        line_colour is not None
-                        and (
-                            draw_outlines
-                            or index % 3 == 0
-                        )
-                    )
+                    if use_outline
                     else None
                 ),
 
                 outline_width=(
                     1
-                    if (
-                        line_colour is not None
-                        and (
-                            draw_outlines
-                            or index % 3 == 0
-                        )
-                    )
+                    if use_outline
                     else 0
                 ),
 
@@ -1266,162 +1246,6 @@ def create_outside_tunnel_section_mesh(
                 },
             )
         )
-
-        # ----------------------------------------------------
-        # LONGITUDINAL GUIDE RIB
-        # ----------------------------------------------------
-        #
-        # One thin raised strip per panel boundary makes the tube
-        # surface much easier to understand while moving quickly.
-        rib_angle = (
-            angle_a
-        )
-
-        rib_a0 = (
-            rib_angle
-            - ridge_half_width
-        )
-
-        rib_a1 = (
-            rib_angle
-            + ridge_half_width
-        )
-
-        rib_colour = (
-            line_colour
-            if line_colour is not None
-            else primary_colour
-        )
-
-        faces.append(
-            Face3D(
-                vertices=[
-                    tunnel_point(
-                        rib_a0 + start_rotation,
-                        start_z,
-                        radius=ridge_radius,
-                    ),
-
-                    tunnel_point(
-                        rib_a1 + start_rotation,
-                        start_z,
-                        radius=ridge_radius,
-                    ),
-
-                    tunnel_point(
-                        rib_a1 + end_rotation,
-                        end_z,
-                        radius=ridge_radius,
-                    ),
-
-                    tunnel_point(
-                        rib_a0 + end_rotation,
-                        end_z,
-                        radius=ridge_radius,
-                    ),
-                ],
-
-                colour=multiply_colour(
-                    rib_colour,
-                    0.82,
-                ),
-
-                outline_colour=None,
-
-                outline_width=0,
-
-                double_sided=True,
-            )
-        )
-
-    # --------------------------------------------------------
-    # CHUNK EDGE RING BANDS
-    # --------------------------------------------------------
-    #
-    # Thin raised rings provide speed/depth cues without bringing
-    # back the heavy segmented look from the old tunnel.
-    ring_colour = (
-        line_colour
-        if line_colour is not None
-        else primary_colour
-    )
-
-    for z_value, rotation in (
-        (
-            start_z,
-            start_rotation,
-        ),
-        (
-            end_z,
-            end_rotation,
-        ),
-    ):
-
-        inner_radius = (
-            radius
-            + 0.04
-        )
-
-        outer_radius = (
-            radius
-            + 0.18
-        )
-
-        for index in range(
-            segments
-        ):
-
-            angle_a = (
-                index
-                * angle_step
-                + rotation
-            )
-
-            angle_b = (
-                angle_a
-                + angle_step
-            )
-
-            faces.append(
-                Face3D(
-                    vertices=[
-                        tunnel_point(
-                            angle_a,
-                            z_value - ring_height,
-                            radius=inner_radius,
-                        ),
-
-                        tunnel_point(
-                            angle_b,
-                            z_value - ring_height,
-                            radius=inner_radius,
-                        ),
-
-                        tunnel_point(
-                            angle_b,
-                            z_value + ring_height,
-                            radius=outer_radius,
-                        ),
-
-                        tunnel_point(
-                            angle_a,
-                            z_value + ring_height,
-                            radius=outer_radius,
-                        ),
-                    ],
-
-                    colour=multiply_colour(
-                        ring_colour,
-                        0.65,
-                    ),
-
-                    outline_colour=None,
-
-                    outline_width=0,
-
-                    double_sided=True,
-                )
-            )
 
     return Mesh3D(
         faces=faces,
